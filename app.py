@@ -1,46 +1,61 @@
+# ============================================================
+# RARE EARTH ELEMENT SOLVENT EXTRACTION SIMULATOR
+# Streamlit application
+# ============================================================
+
 import streamlit as st
-import numpy as np
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
 
+
 # ============================================================
-# CONFIGURAÇÃO DA PÁGINA
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
-    page_title="Simulador de Extração de Terras Raras",
+    page_title="REE Solvent Extraction Simulator",
     page_icon="🧪",
     layout="wide"
 )
 
-st.title("🧪 Simulador de Extração por Solvente — Terras Raras")
-
-st.markdown(
-    """
-    Este simulador calcula sequencialmente **extração → lavagem → reextração**
-    considerando equilíbrio de extração, balanço de massa e balanço de H⁺.
-    """
-)
 
 # ============================================================
-# BANCO DE DADOS
+# CONSTANTS
 # ============================================================
 
-# Ordem adotada:
-# La Ce Pr Nd Sm Eu Gd Tb Dy Ho Y Er Tm Yb Lu
-#
-# O Y foi colocado entre Ho e Er conforme definido.
-#
-# IMPORTANTE:
-# O corte só pode ocorrer entre elementos vizinhos desta sequência.
-
-METAIS = [
-    "La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd",
-    "Tb", "Dy", "Ho", "Y", "Er", "Tm", "Yb", "Lu"
+# Order deliberately chosen by the user:
+# Y is placed between Ho and Er.
+METALS = [
+    "La", "Ce", "Pr", "Nd",
+    "Sm", "Eu", "Gd", "Tb", "Dy",
+    "Ho", "Y", "Er", "Tm", "Yb", "Lu"
 ]
 
-# Massa molar aproximada (g/mol)
-MASSAS_MOLARES = {
+# Kex values associated individually with each metal.
+# This prevents changing the position of Y from accidentally
+# changing its extraction constant.
+KEX = {
+    "La": 1.26e-3,
+    "Ce": 3.03e-3,
+    "Pr": 6.67e-3,
+    "Nd": 1.00e-2,
+    "Sm": 3.00e-2,
+    "Eu": 6.15e-2,
+    "Gd": 1.23e-1,
+    "Tb": 2.40e-1,
+    "Dy": 4.56e-1,
+    "Ho": 1.52e0,
+    "Y": 8.43e-1,
+    "Er": 2.66e0,
+    "Tm": 4.51e0,
+    "Yb": 7.45e0,
+    "Lu": 1.19e1
+}
+
+# Molar masses, g/mol
+MOLAR_MASS = {
     "La": 138.90547,
     "Ce": 140.116,
     "Pr": 140.90766,
@@ -58,1641 +73,1783 @@ MASSAS_MOLARES = {
     "Lu": 174.9668
 }
 
-# Kex do modelo original
-KEX = {
-    "La": 1.26e-3,
-    "Ce": 3.03e-3,
-    "Pr": 6.67e-3,
-    "Nd": 1.00e-2,
-    "Sm": 3.00e-2,
-    "Eu": 6.15e-2,
-    "Gd": 1.23e-1,
-    "Tb": 2.40e-1,
-    "Dy": 4.56e-1,
-    "Ho": 6.80e-1,
-    "Y": 8.43e-1,
-    "Er": 1.52e0,
-    "Tm": 2.66e0,
-    "Yb": 4.51e0,
-    "Lu": 7.45e0
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+DEFAULTS = {
+    "extraction_history": [],
+    "washing_history": [],
+    "stripping_history": [],
+    "extraction_feed": None,
+    "combined_organic": None,
+    "washing_organic_feed": None,
+    "stripping_organic_feed": None,
+    "extraction_sap_remaining": None,
+    "extraction_started": False,
+    "washing_started": False,
+    "stripping_started": False,
+    "stop_extraction": False,
+    "stop_washing": False,
+    "stop_stripping": False,
 }
 
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
 # ============================================================
-# FUNÇÕES AUXILIARES
+# HELPER FUNCTIONS
 # ============================================================
 
-def converter_para_mol_l(valor, unidade, metal):
-    """
-    Converte concentração informada pelo usuário para mol/L.
-    """
-    if unidade == "mol/L":
-        return valor
+def concentration_to_mol(value, unit, metal):
+    """Convert user input concentration to mol/L."""
 
-    if unidade == "mmol/L":
-        return valor / 1000.0
+    if unit == "mol/L":
+        return value
 
-    if unidade == "mg/L":
-        return (valor / 1000.0) / MASSAS_MOLARES[metal]
+    if unit == "g/L":
+        return value / MOLAR_MASS[metal]
 
-    if unidade == "g/L":
-        return valor / MASSAS_MOLARES[metal]
+    if unit == "mg/L":
+        return (value / 1000.0) / MOLAR_MASS[metal]
 
     return 0.0
 
 
-def converter_de_mol_l(valor, unidade, metal):
+def mol_to_unit(value, unit, metal):
+    """Convert mol/L to requested concentration unit."""
+
+    if unit == "mol/L":
+        return value
+
+    if unit == "g/L":
+        return value * MOLAR_MASS[metal]
+
+    if unit == "mg/L":
+        return value * MOLAR_MASS[metal] * 1000.0
+
+    return value
+
+
+def get_groups(cut_pair):
     """
-    Converte mol/L para unidade escolhida pelo usuário.
-    """
-    if unidade == "mol/L":
-        return valor
+    The first member of the selected cut pair belongs to LIGHT.
+    The second member and everything after it belong to HEAVY.
 
-    if unidade == "mmol/L":
-        return valor * 1000.0
-
-    if unidade == "mg/L":
-        return valor * MASSAS_MOLARES[metal] * 1000.0
-
-    if unidade == "g/L":
-        return valor * MASSAS_MOLARES[metal]
-
-    return valor
-
-
-def obter_grupos(corte):
-    """
-    Define leves e pesados.
-
-    Exemplo:
-    corte = Nd/Sm
-
-    leves = La Ce Pr Nd
-    pesados = Sm Eu Gd ...
-
-    O Y está entre Ho e Er.
+    Example:
+        Nd/Sm -> La Ce Pr Nd = light
+                   Sm ... Lu = heavy
     """
 
-    idx = METAIS.index(corte)
+    first, second = cut_pair.split("/")
 
-    leves = METAIS[:idx + 1]
-    pesados = METAIS[idx + 1:]
+    first_index = METALS.index(first)
+    second_index = METALS.index(second)
 
-    return leves, pesados
+    light = METALS[:second_index]
+    heavy = METALS[second_index:]
 
-
-def soma_mols(vetor, metais):
-    """
-    Soma mol/L de uma seleção de metais.
-    """
-    indices = [METAIS.index(m) for m in metais]
-    return np.sum(vetor[indices])
+    return light, heavy
 
 
-def percentual_seguro(a, b):
-    if abs(b) < 1e-30:
+def all_cut_pairs():
+    return [
+        f"{METALS[i]}/{METALS[i+1]}"
+        for i in range(len(METALS) - 1)
+    ]
+
+
+def safe_percent(num, den):
+    if abs(den) < 1e-30:
         return 0.0
-    return 100.0 * a / b
+    return 100.0 * num / den
+
+
+def total_moles(concentrations, volume):
+    return np.asarray(concentrations) * volume
 
 
 # ============================================================
-# MODELO DE EXTRAÇÃO
+# EQUILIBRIUM MODEL
 # ============================================================
 
-def calcular_estagio_extracao(
+def distribution_coefficients(h, free_extractant):
+    """
+    D_i = Kex_i * [E_free]^3 / [H+]^3
+
+    Extractant concentration is expressed on a monomer basis.
+    """
+
+    if h <= 0:
+        h = 1e-30
+
+    if free_extractant <= 0:
+        free_extractant = 1e-30
+
+    return np.array([
+        KEX[m] * free_extractant**3 / h**3
+        for m in METALS
+    ])
+
+
+def solve_extraction_stage(
     caq_in,
     h_in,
-    ext_monomer_total,
-    saponificacao,
-    AO
+    extractant_total,
+    saponified_capacity
 ):
     """
-    Calcula um estágio de extração.
+    Solve one extraction stage.
 
-    O usuário informa o extratante em concentração de MONÔMERO.
+    caq_in:
+        aqueous concentration entering the stage [mol/L]
 
-    Internamente:
-        [extratante dimérico total] = concentração de monômero / 2
+    h_in:
+        H+ entering the stage [mol/L]
 
-    O modelo de Kex utiliza o extratante livre na forma dimérica.
+    extractant_total:
+        total extractant, expressed as monomer concentration [mol/L]
 
-    A reação simplificada é:
+    saponified_capacity:
+        remaining neutralization capacity [mol H+/L]
 
-        M(aq) + 3HL(org) ⇌ ML3(org) + 3H+
+    The model assumes:
+        REE + 3E + 3H+ equilibrium relationship
 
-    e:
+    and:
+        free extractant =
+            total extractant - 3 * total extracted REE
 
-        D = Kex * [L]³ / [H+]³
+    Saponification neutralizes generated H+ until its remaining
+    capacity is exhausted.
     """
 
-    # O extratante total usado pelo modelo é dimérico.
-    ext_dim_total = ext_monomer_total / 2.0
+    total_ree_in = np.sum(caq_in)
 
-    # Capacidade de neutralização associada à saponificação.
-    # Saponificação é informada sobre o monômero.
-    #
-    # Cada mol de espécie dimérica possui 2 unidades monoméricas.
-    # A quantidade de OH equivalente é, portanto, igual à fração
-    # saponificada × concentração de monômero.
-    capacidade_neutralizacao = saponificacao * ext_monomer_total
+    # Initial guesses
+    h_guess = max(h_in, 1e-8)
+    e_guess = max(
+        extractant_total - 0.1 * 3 * total_ree_in,
+        extractant_total * 0.5
+    )
 
     def residual(log_vars):
 
-        # Trabalhamos em log para garantir valores positivos.
+        # Log transformation guarantees positivity.
         h_eq = np.exp(log_vars[0])
-        l_eq = np.exp(log_vars[1])
+        e_free = np.exp(log_vars[1])
 
-        D = np.array([
-            KEX[m] * (l_eq ** 3) / (h_eq ** 3)
-            for m in METAIS
-        ])
+        D = distribution_coefficients(h_eq, e_free)
 
-        caq_eq = caq_in / (1.0 + D * AO)
+        caq_eq = caq_in / (1.0 + D)
+        corg_eq = caq_in - caq_eq
 
-        corg_eq = caq_in * D * AO / (1.0 + D * AO)
+        extracted = np.sum(corg_eq)
 
-        # Extratante livre dimérico.
-        #
-        # Cada complexo consome 3 moléculas do extratante
-        # dimérico no modelo simplificado.
-        ext_dim_calc = ext_dim_total - 3.0 * np.sum(corg_eq)
-
-        if ext_dim_calc <= 0:
-            ext_dim_calc = 1e-20
-
-        # H+ gerado pela extração.
-        h_gerado = 3.0 * np.sum(corg_eq)
-
-        # Neutralização pela saponificação.
-        h_esperado = h_in + max(
-            0.0,
-            h_gerado - capacidade_neutralizacao
+        # Extractant mass balance, monomer basis
+        e_balance = e_free - (
+            extractant_total - 3.0 * extracted
         )
 
-        r_h = np.log(h_eq / max(h_esperado, 1e-20))
+        # H+ generated by extraction
+        h_generated = 3.0 * extracted
 
-        r_l = np.log(l_eq / ext_dim_calc)
+        # Neutralization by saponified extractant
+        neutralized = min(
+            h_generated,
+            saponified_capacity
+        )
 
-        return [r_h, r_l]
+        h_expected = (
+            h_in
+            + h_generated
+            - neutralized
+        )
 
-    # Chute inicial
-    h0 = max(h_in, 1e-8)
-    l0 = max(ext_dim_total * 0.5, 1e-8)
+        h_balance = h_eq - h_expected
 
-    sol = least_squares(
+        # Scale equations so one does not dominate numerically.
+        scale_e = max(extractant_total, 1e-6)
+        scale_h = max(h_expected, 1e-8)
+
+        return [
+            e_balance / scale_e,
+            h_balance / scale_h
+        ]
+
+    result = least_squares(
         residual,
-        np.log([h0, l0]),
-        max_nfev=2000,
-        xtol=1e-12,
-        ftol=1e-12,
-        gtol=1e-12
+        np.log([
+            h_guess,
+            e_guess
+        ]),
+        xtol=1e-13,
+        ftol=1e-13,
+        gtol=1e-13,
+        max_nfev=5000
     )
 
-    h_eq = np.exp(sol.x[0])
-    l_eq = np.exp(sol.x[1])
+    h_eq = np.exp(result.x[0])
+    e_free = np.exp(result.x[1])
 
-    D = np.array([
-        KEX[m] * (l_eq ** 3) / (h_eq ** 3)
-        for m in METAIS
-    ])
+    D = distribution_coefficients(h_eq, e_free)
 
-    caq_eq = caq_in / (1.0 + D * AO)
-    corg_eq = caq_in * D * AO / (1.0 + D * AO)
+    caq_eq = caq_in / (1.0 + D)
+    corg_eq = caq_in - caq_eq
 
-    return caq_eq, corg_eq, h_eq, l_eq
+    extracted = np.sum(corg_eq)
+    h_generated = 3.0 * extracted
+
+    neutralized = min(
+        h_generated,
+        saponified_capacity
+    )
+
+    sap_remaining = max(
+        0.0,
+        saponified_capacity - neutralized
+    )
+
+    return {
+        "caq": caq_eq,
+        "corg": corg_eq,
+        "h": h_eq,
+        "pH": -np.log10(max(h_eq, 1e-30)),
+        "free_extractant": e_free,
+        "D": D,
+        "extracted": extracted,
+        "h_generated": h_generated,
+        "neutralized": neutralized,
+        "sap_remaining": sap_remaining,
+    }
 
 
 # ============================================================
-# MODELO DE LAVAGEM
+# WASHING MODEL
 # ============================================================
 
-def calcular_estagio_lavagem(
+def solve_washing_stage(
     corg_in,
-    h_in,
-    ext_monomer_total,
-    AO
+    h_wash,
+    extractant_total
 ):
     """
-    Lavagem da fase orgânica com solução ácida sem adição
-    deliberada de terra rara.
+    Washing stage.
 
-    A fase aquosa nova entra inicialmente sem ETR.
+    A fresh acidic aqueous solution contacts the organic phase.
 
-    O orgânico é progressivamente descarregado.
+    No heavy REE is intentionally added to the washing solution.
 
-    O H+ recebido pelo estágio é o H+ do estágio anterior.
+    Organic and aqueous phase volumes are both represented explicitly.
     """
-
-    ext_dim_total = ext_monomer_total / 2.0
-
-    # Na lavagem não há nova saponificação.
-    capacidade_neutralizacao = 0.0
-
-    caq_in = np.zeros(len(METAIS))
 
     def residual(log_vars):
 
         h_eq = np.exp(log_vars[0])
-        l_eq = np.exp(log_vars[1])
+        e_free = np.exp(log_vars[1])
 
-        D = np.array([
-            KEX[m] * (l_eq ** 3) / (h_eq ** 3)
-            for m in METAIS
-        ])
+        D = distribution_coefficients(h_eq, e_free)
 
-        # Balanço de massa em cada metal.
-        #
-        # C_org,in + C_aq,in / AO
-        # =
-        # C_org,eq + C_aq,eq / AO
-        #
-        # Como C_org = D*C_aq:
-        caq_eq = (
-            corg_in + caq_in / AO
-        ) / (
-            D + 1.0 / AO
+        # For O/A = 1 in the stage equations.
+        # The actual phase volumes are handled externally.
+        caq_eq = corg_in / D
+        corg_eq = caq_eq * D
+
+        # Since D = Corg/Caq, the above is mathematically
+        # equivalent to solving the partitioning relationship.
+        # H balance:
+        metal_to_aq = np.sum(corg_in - corg_eq)
+
+        h_expected = h_wash + 3.0 * metal_to_aq
+
+        # Extractant released when REEs leave organic.
+        # The wash does not add fresh extractant.
+        e_expected = extractant_total + 3.0 * (
+            np.sum(corg_in) - np.sum(corg_eq)
         )
 
-        corg_eq = D * caq_eq
+        return [
+            (h_eq - h_expected) / max(h_expected, 1e-8),
+            (e_free - e_expected) / max(
+                extractant_total,
+                1e-6
+            )
+        ]
 
-        ext_dim_calc = (
-            ext_dim_total -
-            3.0 * np.sum(corg_eq)
+    # The simplified wash is most robustly solved directly by
+    # equilibrium iteration.
+    h_eq = max(h_wash, 1e-10)
+    e_free = max(extractant_total, 1e-10)
+
+    for _ in range(100):
+
+        D = distribution_coefficients(
+            h_eq,
+            e_free
         )
 
-        ext_dim_calc = max(ext_dim_calc, 1e-20)
+        # For O/A = 1
+        caq_eq = corg_in / (1.0 + D)
+        corg_eq = corg_in - caq_eq
 
-        # Durante a lavagem, quando metal sai da orgânica,
-        # ocorre consumo de H+.
-        metal_transferido = np.sum(corg_in - corg_eq)
-
-        h_esperado = h_in - 3.0 * metal_transferido
-
-        h_esperado = max(h_esperado, 1e-20)
-
-        r_h = np.log(h_eq / h_esperado)
-        r_l = np.log(l_eq / ext_dim_calc)
-
-        return [r_h, r_l]
-
-    h0 = max(h_in, 1e-8)
-    l0 = max(ext_dim_total * 0.8, 1e-8)
-
-    sol = least_squares(
-        residual,
-        np.log([h0, l0]),
-        max_nfev=2000,
-        xtol=1e-12,
-        ftol=1e-12,
-        gtol=1e-12
-    )
-
-    h_eq = np.exp(sol.x[0])
-    l_eq = np.exp(sol.x[1])
-
-    D = np.array([
-        KEX[m] * (l_eq ** 3) / (h_eq ** 3)
-        for m in METAIS
-    ])
-
-    caq_eq = (
-        corg_in + caq_in / AO
-    ) / (
-        D + 1.0 / AO
-    )
-
-    corg_eq = D * caq_eq
-
-    return caq_eq, corg_eq, h_eq, l_eq
-
-
-# ============================================================
-# MODELO DE REEXTRAÇÃO
-# ============================================================
-
-def calcular_estagio_reextracao(
-    corg_in,
-    h_in,
-    ext_monomer_total,
-    primeiro_estagio
-):
-    """
-    Reextração usando solução ácida.
-
-    O ácido é informado diretamente como [H+].
-
-    No primeiro estágio ocorre a neutralização da saponificação
-    residual. Depois disso, o H+ recebido é o H+ do estágio anterior.
-    """
-
-    ext_dim_total = ext_monomer_total / 2.0
-
-    if primeiro_estagio:
-        # Aqui a quantidade de saponificação residual será definida
-        # externamente pela interface.
-        pass
-
-    caq_in = np.zeros(len(METAIS))
-
-    def residual(log_vars):
-
-        h_eq = np.exp(log_vars[0])
-        l_eq = np.exp(log_vars[1])
-
-        D = np.array([
-            KEX[m] * (l_eq ** 3) / (h_eq ** 3)
-            for m in METAIS
-        ])
-
-        caq_eq = (
-            corg_in + caq_in
-        ) / (
-            D + 1.0
-        )
-
-        corg_eq = D * caq_eq
-
-        ext_dim_calc = (
-            ext_dim_total -
-            3.0 * np.sum(corg_eq)
-        )
-
-        ext_dim_calc = max(ext_dim_calc, 1e-20)
-
-        metal_extraido = np.sum(
+        metal_to_aq = np.sum(
             corg_in - corg_eq
         )
 
-        h_esperado = (
-            h_in -
-            3.0 * metal_extraido
+        h_new = max(
+            1e-12,
+            h_wash + 3.0 * metal_to_aq
         )
 
-        h_esperado = max(
-            h_esperado,
-            1e-20
+        e_new = max(
+            1e-12,
+            extractant_total + 3.0 * metal_to_aq
         )
 
-        r_h = np.log(h_eq / h_esperado)
-        r_l = np.log(l_eq / ext_dim_calc)
+        if (
+            abs(h_new - h_eq) < 1e-12
+            and abs(e_new - e_free) < 1e-12
+        ):
+            break
 
-        return [r_h, r_l]
+        h_eq = 0.5 * h_eq + 0.5 * h_new
+        e_free = 0.5 * e_free + 0.5 * e_new
 
-    h0 = max(h_in * 0.9, 1e-8)
-    l0 = max(ext_dim_total * 0.9, 1e-8)
-
-    sol = least_squares(
-        residual,
-        np.log([h0, l0]),
-        max_nfev=2000,
-        xtol=1e-12,
-        ftol=1e-12,
-        gtol=1e-12
+    D = distribution_coefficients(
+        h_eq,
+        e_free
     )
 
-    h_eq = np.exp(sol.x[0])
-    l_eq = np.exp(sol.x[1])
+    caq_eq = corg_in / (1.0 + D)
+    corg_eq = corg_in - caq_eq
 
-    D = np.array([
-        KEX[m] * (l_eq ** 3) / (h_eq ** 3)
-        for m in METAIS
-    ])
+    return {
+        "caq": caq_eq,
+        "corg": corg_eq,
+        "h": h_eq,
+        "pH": -np.log10(max(h_eq, 1e-30)),
+        "free_extractant": e_free,
+        "D": D
+    }
+
+
+# ============================================================
+# STRIPPING MODEL
+# ============================================================
+
+def solve_stripping_stage(
+    corg_in,
+    h_acid
+):
+    """
+    Acid stripping.
+
+    Fresh acidic solution contacts the organic phase.
+
+    No new REE is introduced.
+
+    The stripping solution is treated as a fresh aqueous phase.
+    """
+
+    h_eq = max(h_acid, 1e-12)
+
+    # Iterative equilibrium because the released metals influence
+    # the H+ balance.
+    for _ in range(200):
+
+        # During stripping the extractant concentration approaches
+        # the total organic extractant concentration. We estimate
+        # the free fraction from the organic loading.
+        loading = np.sum(corg_in)
+
+        e_free = max(
+            1e-10,
+            0.5 - 3.0 * loading
+        )
+
+        D = distribution_coefficients(
+            h_eq,
+            e_free
+        )
+
+        caq_eq = corg_in / (
+            D + 1.0
+        )
+
+        corg_eq = corg_in - caq_eq
+
+        stripped = np.sum(
+            corg_in - corg_eq
+        )
+
+        h_new = max(
+            1e-12,
+            h_acid - 3.0 * stripped
+        )
+
+        if abs(h_new - h_eq) < 1e-12:
+            break
+
+        h_eq = 0.5 * h_eq + 0.5 * h_new
+
+    D = distribution_coefficients(
+        h_eq,
+        e_free
+    )
 
     caq_eq = corg_in / (D + 1.0)
-    corg_eq = D * caq_eq
+    corg_eq = corg_in - caq_eq
 
-    return caq_eq, corg_eq, h_eq, l_eq
+    return {
+        "caq": caq_eq,
+        "corg": corg_eq,
+        "h": h_eq,
+        "pH": -np.log10(max(h_eq, 1e-30)),
+        "free_extractant": e_free,
+        "D": D
+    }
 
 
 # ============================================================
-# MÉTRICAS DO ESTÁGIO
+# METRIC FUNCTIONS
 # ============================================================
 
-def calcular_metricas(
-    caq_in,
-    caq_out,
-    corg_out,
-    caq_original,
-    corte
+def phase_composition(conc, group):
+    total = np.sum(conc)
+
+    if total <= 1e-30:
+        return 0.0
+
+    return 100.0 * np.sum([
+        conc[METALS.index(m)]
+        for m in group
+    ]) / total
+
+
+def group_phase_distribution(
+    aq,
+    org,
+    group
+):
+    aq_total = np.sum([
+        aq[METALS.index(m)]
+        for m in group
+    ])
+
+    org_total = np.sum([
+        org[METALS.index(m)]
+        for m in group
+    ])
+
+    total = aq_total + org_total
+
+    if total <= 1e-30:
+        return 0.0, 0.0
+
+    return (
+        100.0 * aq_total / total,
+        100.0 * org_total / total
+    )
+
+
+def create_extraction_row(
+    stage,
+    result,
+    initial_aq,
+    previous_aq,
+    cut_pair
 ):
 
-    leves, pesados = obter_grupos(corte)
+    light, heavy = get_groups(cut_pair)
 
-    idx_leves = [METAIS.index(m) for m in leves]
-    idx_pesados = [METAIS.index(m) for m in pesados]
+    aq = result["caq"]
+    org = result["corg"]
 
-    metricas = {}
+    row = {
+        "Stage": stage,
+        "pH": result["pH"],
+        "H+ (mol/L)": result["h"],
+        "Free extractant (mol/L)": result["free_extractant"],
+        "Aqueous Light (%)": phase_composition(aq, light),
+        "Aqueous Heavy (%)": phase_composition(aq, heavy),
+        "Organic Light (%)": phase_composition(org, light),
+        "Organic Heavy (%)": phase_composition(org, heavy),
+    }
 
-    # --------------------------------------------------------
-    # EXTRAÇÃO INDIVIDUAL
-    # --------------------------------------------------------
-
-    extracao_estagio = np.zeros(len(METAIS))
-    extracao_acumulada = np.zeros(len(METAIS))
-
-    for i, m in enumerate(METAIS):
-
-        # Quanto foi retirado do que entrou no estágio
-        if caq_in[i] > 0:
-            extracao_estagio[i] = (
-                (caq_in[i] - caq_out[i])
-                / caq_in[i]
-                * 100
-            )
-
-        # Quanto foi retirado em relação ao feed original
-        if caq_original[i] > 0:
-            extracao_acumulada[i] = (
-                (caq_original[i] - caq_out[i])
-                / caq_original[i]
-                * 100
-            )
-
-    metricas["Extracao_estagio"] = extracao_estagio
-    metricas["Extracao_acumulada"] = extracao_acumulada
-
-    # --------------------------------------------------------
-    # DISTRIBUIÇÃO NA FASE AQUOSA
-    # --------------------------------------------------------
-
-    mol_aq_leves = np.sum(caq_out[idx_leves])
-    mol_aq_pesados = np.sum(caq_out[idx_pesados])
-    mol_aq_total = mol_aq_leves + mol_aq_pesados
-
-    metricas["Aq_%_leves"] = percentual_seguro(
-        mol_aq_leves,
-        mol_aq_total
+    light_aq, light_org = group_phase_distribution(
+        aq,
+        org,
+        light
     )
 
-    metricas["Aq_%_pesados"] = percentual_seguro(
-        mol_aq_pesados,
-        mol_aq_total
+    heavy_aq, heavy_org = group_phase_distribution(
+        aq,
+        org,
+        heavy
     )
 
-    # --------------------------------------------------------
-    # DISTRIBUIÇÃO NA FASE ORGÂNICA
-    # --------------------------------------------------------
+    row["Light: Aqueous (%)"] = light_aq
+    row["Light: Organic (%)"] = light_org
+    row["Heavy: Aqueous (%)"] = heavy_aq
+    row["Heavy: Organic (%)"] = heavy_org
 
-    mol_org_leves = np.sum(corg_out[idx_leves])
-    mol_org_pesados = np.sum(corg_out[idx_pesados])
-    mol_org_total = mol_org_leves + mol_org_pesados
+    for i, metal in enumerate(METALS):
 
-    metricas["Org_%_leves"] = percentual_seguro(
-        mol_org_leves,
-        mol_org_total
-    )
+        stage_extraction = safe_percent(
+            previous_aq[i] - aq[i],
+            previous_aq[i]
+        )
 
-    metricas["Org_%_pesados"] = percentual_seguro(
-        mol_org_pesados,
-        mol_org_total
-    )
+        cumulative_extraction = safe_percent(
+            initial_aq[i] - aq[i],
+            initial_aq[i]
+        )
 
-    # --------------------------------------------------------
-    # DISTRIBUIÇÃO DOS LEVES ENTRE FASES
-    # --------------------------------------------------------
+        row[f"{metal} Aq (mol/L)"] = aq[i]
+        row[f"{metal} Org (mol/L)"] = org[i]
 
-    total_leves = mol_aq_leves + mol_org_leves
+        row[f"{metal} Stage Extraction (%)"] = stage_extraction
+        row[f"{metal} Cumulative Extraction (%)"] = cumulative_extraction
 
-    metricas["Leves_%_aq"] = percentual_seguro(
-        mol_aq_leves,
-        total_leves
-    )
-
-    metricas["Leves_%_org"] = percentual_seguro(
-        mol_org_leves,
-        total_leves
-    )
-
-    # --------------------------------------------------------
-    # DISTRIBUIÇÃO DOS PESADOS ENTRE FASES
-    # --------------------------------------------------------
-
-    total_pesados = mol_aq_pesados + mol_org_pesados
-
-    metricas["Pesados_%_aq"] = percentual_seguro(
-        mol_aq_pesados,
-        total_pesados
-    )
-
-    metricas["Pesados_%_org"] = percentual_seguro(
-        mol_org_pesados,
-        total_pesados
-    )
-
-    return metricas
+    return row
 
 
 # ============================================================
-# INTERFACE
+# GRAPH FUNCTIONS
 # ============================================================
 
-abas = st.tabs([
-    "1️⃣ Extração",
-    "2️⃣ Lavagem",
-    "3️⃣ Reextração"
-])
+def plot_line_chart(
+    df,
+    columns,
+    title,
+    ylabel
+):
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for col in columns:
+        ax.plot(
+            df["Stage"],
+            df[col],
+            marker="o",
+            label=col
+        )
+
+    ax.set_title(title)
+    ax.set_xlabel("Stage")
+    ax.set_ylabel(ylabel)
+    ax.grid(alpha=0.25)
+    ax.legend(
+        bbox_to_anchor=(1.02, 1),
+        loc="upper left"
+    )
+
+    fig.tight_layout()
+
+    return fig
+
+
+def plot_group_distribution(
+    df,
+    aq_column,
+    org_column,
+    title
+):
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    x = np.arange(len(df))
+
+    aq = df[aq_column].values
+    org = df[org_column].values
+
+    ax.bar(
+        x,
+        aq,
+        label="Aqueous"
+    )
+
+    ax.bar(
+        x,
+        org,
+        bottom=aq,
+        label="Organic"
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        df["Stage"].astype(str)
+    )
+
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Stage")
+    ax.set_ylabel("Distribution (%)")
+    ax.set_title(title)
+    ax.legend()
+
+    fig.tight_layout()
+
+    return fig
+
+
+def plot_phase_composition(
+    df,
+    light_col,
+    heavy_col,
+    title
+):
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    x = np.arange(len(df))
+
+    light = df[light_col].values
+    heavy = df[heavy_col].values
+
+    ax.bar(
+        x,
+        light,
+        label="Light REEs"
+    )
+
+    ax.bar(
+        x,
+        heavy,
+        bottom=light,
+        label="Heavy REEs"
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        df["Stage"].astype(str)
+    )
+
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Stage")
+    ax.set_ylabel("Molar composition (%)")
+    ax.set_title(title)
+    ax.legend()
+
+    fig.tight_layout()
+
+    return fig
+
+
+def plot_elemental_composition(
+    df,
+    phase,
+    title
+):
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+
+    x = np.arange(len(df))
+
+    bottom = np.zeros(len(df))
+
+    for metal in METALS:
+
+        col = f"{metal} {phase} (mol/L)"
+
+        if col not in df.columns:
+            continue
+
+        values = df[col].values
+
+        # Convert concentration to relative composition
+        totals = np.zeros(len(df))
+
+        for m in METALS:
+            c = f"{m} {phase} (mol/L)"
+            if c in df.columns:
+                totals += df[c].values
+
+        percentages = np.divide(
+            values,
+            totals,
+            out=np.zeros_like(values),
+            where=totals > 0
+        ) * 100.0
+
+        ax.bar(
+            x,
+            percentages,
+            bottom=bottom,
+            label=metal
+        )
+
+        bottom += percentages
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        df["Stage"].astype(str)
+    )
+
+    ax.set_ylim(0, 100)
+    ax.set_xlabel("Stage")
+    ax.set_ylabel("Molar composition (%)")
+    ax.set_title(title)
+    ax.legend(
+        bbox_to_anchor=(1.02, 1),
+        loc="upper left",
+        ncol=2
+    )
+
+    fig.tight_layout()
+
+    return fig
 
 
 # ============================================================
-# ABA 1 — EXTRAÇÃO
+# SIDEBAR
 # ============================================================
 
-with abas[0]:
+st.sidebar.title("Simulation")
 
-    st.header("Extração")
+page = st.sidebar.radio(
+    "Process",
+    [
+        "1 — Extraction",
+        "2 — Washing",
+        "3 — Re-extraction"
+    ]
+)
 
-    st.subheader("Composição do licor de alimentação")
 
-    col1, col2 = st.columns([3, 1])
+# ============================================================
+# EXTRACTION PAGE
+# ============================================================
+
+if page == "1 — Extraction":
+
+    st.title("REE Solvent Extraction")
+    st.caption(
+        "Counter-current separation is represented as sequential "
+        "equilibrium contacts."
+    )
+
+    st.header("Feed composition")
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        unidade_feed = st.selectbox(
-            "Unidade das concentrações",
-            ["mg/L", "g/L", "mmol/L", "mol/L"],
-            key="feed_unit"
+        concentration_unit = st.selectbox(
+            "Concentration unit",
+            [
+                "mg/L",
+                "g/L",
+                "mol/L"
+            ]
         )
 
     with col2:
-        ph_inicial = st.number_input(
-            "pH inicial",
-            min_value=0.0,
+        feed_volume = st.number_input(
+            "Aqueous feed volume (L)",
+            min_value=0.001,
+            value=1.0,
+            step=0.1
+        )
+
+    with col3:
+        initial_pH = st.number_input(
+            "Initial pH",
+            min_value=-2.0,
             max_value=14.0,
             value=1.0,
             step=0.1
         )
 
-    st.markdown("### Terras raras no licor")
+    st.subheader("REE concentrations")
 
-    valores_feed = {}
+    feed_values = {}
 
     cols = st.columns(5)
 
-    for i, metal in enumerate(METAIS):
+    for i, metal in enumerate(METALS):
 
         with cols[i % 5]:
 
-            valores_feed[metal] = st.number_input(
-                f"{metal} ({unidade_feed})",
+            feed_values[metal] = st.number_input(
+                f"{metal} ({concentration_unit})",
                 min_value=0.0,
                 value=0.0,
                 format="%.8g",
                 key=f"feed_{metal}"
             )
 
-    st.markdown("---")
+    st.divider()
 
-    st.subheader("Parâmetros de extração")
+    st.header("Extraction parameters")
 
-    c1, c2, c3, c4 = st.columns(4)
+    col1, col2, col3, col4 = st.columns(4)
 
-    with c1:
-        AO = st.number_input(
-            "Razão A/O",
+    with col1:
+        cut_pair = st.selectbox(
+            "REE cut",
+            all_cut_pairs(),
+            index=METALS.index("Nd")
+            if "Nd" in METALS else 3
+        )
+
+    with col2:
+        oa_ratio = st.number_input(
+            "O/A ratio",
             min_value=0.001,
             value=1.0,
             step=0.1
         )
 
-    with c2:
-        ext_monomer = st.number_input(
-            "Extratatante total (mol/L de monômero)",
+    with col3:
+        extractant_total = st.number_input(
+            "Total extractant concentration "
+            "(mol/L, monomer basis)",
             min_value=0.000001,
-            value=1.0,
-            step=0.1
+            value=0.5,
+            step=0.05
         )
 
-    with c3:
-        saponificacao = st.number_input(
-            "Saponificação (%)",
+    with col4:
+        saponification = st.number_input(
+            "Saponification (%)",
             min_value=0.0,
             max_value=100.0,
             value=40.0,
-            step=1.0
-        ) / 100.0
-
-    with c4:
-        n_estagios = st.number_input(
-            "Número inicial de estágios",
-            min_value=1,
-            max_value=200,
-            value=5,
-            step=1
+            step=5.0
         )
 
-    corte = st.selectbox(
-        "Par de corte",
-        [
-            f"{METAIS[i]}/{METAIS[i+1]}"
-            for i in range(len(METAIS)-1)
-        ]
-    )
-
-    metal_corte_1, metal_corte_2 = corte.split("/")
-
-    leves, pesados = obter_grupos(metal_corte_2)
-
-    st.info(
-        f"**Leves:** {', '.join(leves)}  \n"
-        f"**Pesados:** {', '.join(pesados)}"
-    )
-
-    pureza_desejada = st.number_input(
-        "Pureza desejada dos leves na fase aquosa (%)",
+    target_purity = st.number_input(
+        "Target aqueous light-REE purity (%)",
         min_value=0.0,
         max_value=100.0,
         value=99.9,
         step=0.1
     )
 
-    st.markdown("---")
+    light, heavy = get_groups(cut_pair)
+
+    st.info(
+        f"Cut: **{cut_pair}**  |  "
+        f"Light REEs: **{', '.join(light)}**  |  "
+        f"Heavy REEs: **{', '.join(heavy)}**"
+    )
+
+    # --------------------------------------------------------
+    # Initialize feed
+    # --------------------------------------------------------
 
     if st.button(
-        "▶️ Iniciar simulação de extração",
-        type="primary",
-        use_container_width=True
+        "Start / Reset Extraction",
+        type="primary"
     ):
 
-        # ----------------------------------------------------
-        # CONVERSÃO DO FEED
-        # ----------------------------------------------------
-
-        caq_original = np.array([
-            converter_para_mol_l(
-                valores_feed[m],
-                unidade_feed,
+        initial_aq = np.array([
+            concentration_to_mol(
+                feed_values[m],
+                concentration_unit,
                 m
             )
-            for m in METAIS
+            for m in METALS
         ])
 
-        # ----------------------------------------------------
-        # ESTADO INICIAL
-        # ----------------------------------------------------
-
-        caq_atual = caq_original.copy()
-        h_atual = 10 ** (-ph_inicial)
-
-        historico = []
-
-        # Volume aquoso arbitrário de referência = 1 L
-        # O AO determina o volume orgânico correspondente.
-        volume_aq = 1.0
-        volume_org = AO
-
-        # ----------------------------------------------------
-        # LOOP
-        # ----------------------------------------------------
-
-        for estagio in range(1, int(n_estagios) + 1):
-
-            caq_out, corg_out, h_out, ext_livre = (
-                calcular_estagio_extracao(
-                    caq_atual,
-                    h_atual,
-                    ext_monomer,
-                    saponificacao,
-                    AO
-                )
-            )
-
-            metricas = calcular_metricas(
-                caq_atual,
-                caq_out,
-                corg_out,
-                caq_original,
-                metal_corte_2
-            )
-
-            linha = {
-                "Estágio": estagio,
-                "H+ (mol/L)": h_out,
-                "pH": -np.log10(max(h_out, 1e-20)),
-                "Extratatante livre dimérico (mol/L)": ext_livre
-            }
-
-            for i, m in enumerate(METAIS):
-
-                linha[f"Aq {m} (mol/L)"] = caq_out[i]
-                linha[f"Org {m} (mol/L)"] = corg_out[i]
-
-                linha[f"Extração {m} (%)"] = (
-                    metricas["Extracao_estagio"][i]
-                )
-
-                linha[f"Extração acumulada {m} (%)"] = (
-                    metricas["Extracao_acumulada"][i]
-                )
-
-            linha["Aq — leves (%)"] = metricas["Aq_%_leves"]
-            linha["Aq — pesados (%)"] = metricas["Aq_%_pesados"]
-
-            linha["Org — leves (%)"] = metricas["Org_%_leves"]
-            linha["Org — pesados (%)"] = metricas["Org_%_pesados"]
-
-            linha["Leves — Aq (%)"] = metricas["Leves_%_aq"]
-            linha["Leves — Org (%)"] = metricas["Leves_%_org"]
-
-            linha["Pesados — Aq (%)"] = metricas["Pesados_%_aq"]
-            linha["Pesados — Org (%)"] = metricas["Pesados_%_org"]
-
-            historico.append(linha)
-
-            caq_atual = caq_out
-            h_atual = h_out
-
-        df_extracao = pd.DataFrame(historico)
-
-        st.session_state["df_extracao"] = df_extracao
-        st.session_state["caq_original"] = caq_original
-        st.session_state["corg_extracao_final"] = np.array([
-            historico[-1][f"Org {m} (mol/L)"]
-            for m in METAIS
-        ])
-        st.session_state["h_extracao_final"] = h_atual
-        st.session_state["ext_monomer"] = ext_monomer
-        st.session_state["AO"] = AO
-        st.session_state["corte"] = metal_corte_2
-
-        st.success(
-            "Simulação concluída. Agora você pode escolher o que deseja visualizar."
+        st.session_state.extraction_feed = initial_aq.copy()
+        st.session_state.extraction_history = []
+        st.session_state.extraction_sap_remaining = (
+            extractant_total * saponification / 100.0
         )
+        st.session_state.extraction_started = True
+        st.session_state.stop_extraction = False
 
-    # ========================================================
-    # RESULTADOS
-    # ========================================================
+        st.rerun()
 
-    if "df_extracao" in st.session_state:
+    # --------------------------------------------------------
+    # Extraction stage calculation
+    # --------------------------------------------------------
 
-        df = st.session_state["df_extracao"]
+    if st.session_state.extraction_started:
 
-        st.markdown("---")
-        st.subheader("Resultados da extração")
+        initial_aq = st.session_state.extraction_feed
 
-        opcoes_resultado = st.multiselect(
-            "O que você deseja visualizar?",
-            [
-                "Concentração na fase aquosa",
-                "Concentração na fase orgânica",
-                "Extratação no estágio",
-                "Extração acumulada",
-                "H+ e pH",
-                "Extratatante livre",
-                "Distribuição molar na aquosa",
-                "Distribuição molar na orgânica",
-                "Distribuição dos leves entre fases",
-                "Distribuição dos pesados entre fases"
-            ],
-            default=[
-                "Concentração na fase aquosa",
-                "Concentração na fase orgânica"
-            ]
-        )
+        if len(st.session_state.extraction_history) == 0:
 
-        metais_visualizacao = st.multiselect(
-            "Metais a visualizar",
-            METAIS,
-            default=[metal_corte_1, metal_corte_2]
-        )
-
-        tabela = pd.DataFrame()
-        tabela["Estágio"] = df["Estágio"]
-
-        # ----------------------------------------------------
-        # CONCENTRAÇÕES AQUOSAS
-        # ----------------------------------------------------
-
-        if "Concentração na fase aquosa" in opcoes_resultado:
-
-            unidade_resultado = st.selectbox(
-                "Unidade das concentrações",
-                ["mg/L", "g/L", "mmol/L", "mol/L"],
-                key="unidade_resultado"
-            )
-
-            for m in metais_visualizacao:
-
-                tabela[
-                    f"Aq {m} ({unidade_resultado})"
-                ] = df[
-                    f"Aq {m} (mol/L)"
-                ].apply(
-                    lambda x, metal=m:
-                    converter_de_mol_l(
-                        x,
-                        unidade_resultado,
-                        metal
-                    )
-                )
-
-        # ----------------------------------------------------
-        # CONCENTRAÇÕES ORGÂNICAS
-        # ----------------------------------------------------
-
-        if "Concentração na fase orgânica" in opcoes_resultado:
-
-            unidade_resultado_org = st.selectbox(
-                "Unidade das concentrações orgânicas",
-                ["mg/L", "g/L", "mmol/L", "mol/L"],
-                key="unidade_resultado_org"
-            )
-
-            for m in metais_visualizacao:
-
-                tabela[
-                    f"Org {m} ({unidade_resultado_org})"
-                ] = df[
-                    f"Org {m} (mol/L)"
-                ].apply(
-                    lambda x, metal=m:
-                    converter_de_mol_l(
-                        x,
-                        unidade_resultado_org,
-                        metal
-                    )
-                )
-
-        # ----------------------------------------------------
-        # EXTRAÇÃO NO ESTÁGIO
-        # ----------------------------------------------------
-
-        if "Extratação no estágio" in opcoes_resultado:
-
-            for m in metais_visualizacao:
-                tabela[
-                    f"Extração {m} — estágio (%)"
-                ] = df[
-                    f"Extração {m} (%)"
-                ]
-
-        # ----------------------------------------------------
-        # EXTRAÇÃO ACUMULADA
-        # ----------------------------------------------------
-
-        if "Extração acumulada" in opcoes_resultado:
-
-            for m in metais_visualizacao:
-                tabela[
-                    f"Extração {m} — acumulada (%)"
-                ] = df[
-                    f"Extração acumulada {m} (%)"
-                ]
-
-        # ----------------------------------------------------
-        # H+
-        # ----------------------------------------------------
-
-        if "H+ e pH" in opcoes_resultado:
-
-            tabela["H+ (mol/L)"] = df["H+ (mol/L)"]
-            tabela["pH"] = df["pH"]
-
-        # ----------------------------------------------------
-        # EXTRATANTE
-        # ----------------------------------------------------
-
-        if "Extratatante livre" in opcoes_resultado:
-
-            tabela[
-                "Extratatante livre dimérico (mol/L)"
-            ] = df[
-                "Extratatante livre dimérico (mol/L)"
-            ]
-
-        # ----------------------------------------------------
-        # DISTRIBUIÇÃO AQ
-        # ----------------------------------------------------
-
-        if "Distribuição molar na aquosa" in opcoes_resultado:
-
-            tabela["Aq — leves (%)"] = df["Aq — leves (%)"]
-            tabela["Aq — pesados (%)"] = df["Aq — pesados (%)"]
-
-        # ----------------------------------------------------
-        # DISTRIBUIÇÃO ORG
-        # ----------------------------------------------------
-
-        if "Distribuição molar na orgânica" in opcoes_resultado:
-
-            tabela["Org — leves (%)"] = df["Org — leves (%)"]
-            tabela["Org — pesados (%)"] = df["Org — pesados (%)"]
-
-        # ----------------------------------------------------
-        # LEVES ENTRE FASES
-        # ----------------------------------------------------
-
-        if "Distribuição dos leves entre fases" in opcoes_resultado:
-
-            tabela["Leves — Aq (%)"] = df["Leves — Aq (%)"]
-            tabela["Leves — Org (%)"] = df["Leves — Org (%)"]
-
-        # ----------------------------------------------------
-        # PESADOS ENTRE FASES
-        # ----------------------------------------------------
-
-        if "Distribuição dos pesados entre fases" in opcoes_resultado:
-
-            tabela["Pesados — Aq (%)"] = df["Pesados — Aq (%)"]
-            tabela["Pesados — Org (%)"] = df["Pesados — Org (%)"]
-
-        st.dataframe(
-            tabela,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        # ====================================================
-        # AVISO DE PUREZA
-        # ====================================================
-
-        st.markdown("---")
-
-        st.subheader("🎯 Pureza do corte")
-
-        purezas = df["Aq — leves (%)"].values
-
-        indice = None
-
-        for i, pureza in enumerate(purezas):
-
-            if pureza >= pureza_desejada:
-                indice = i
-                break
-
-        if pureza_desejada <= purezas[0]:
-
-            st.info(
-                f"A solução aquosa já apresenta "
-                f"**{purezas[0]:.4f}% de leves no estágio 0** "
-                f"para o corte {metal_corte_1}/{metal_corte_2}."
-            )
-
-        elif indice is not None:
-
-            est = int(df.iloc[indice]["Estágio"])
-
-            st.success(
-                f"🎯 A pureza de **{pureza_desejada:.3f}% de leves "
-                f"na fase aquosa** é atingida no estágio **{est}**."
-            )
+            current_aq = initial_aq.copy()
+            h_in = 10 ** (-initial_pH)
 
         else:
 
-            st.warning(
-                f"A pureza de {pureza_desejada:.3f}% ainda não foi "
-                f"atingida nos {len(df)} estágios calculados."
-            )
+            last = st.session_state.extraction_history[-1]
 
-        # ====================================================
-        # CONTROLE DE CONTINUAÇÃO
-        # ====================================================
-
-        st.markdown("---")
-
-        st.subheader("Próximo passo")
-
-        continuar = st.button(
-            "➕ Adicionar mais um estágio",
-            use_container_width=True
-        )
-
-        parar = st.button(
-            "🛑 Parar extração e ir para lavagem",
-            type="primary",
-            use_container_width=True
-        )
-
-        if continuar:
-
-            # Usa o último estado conhecido e calcula mais um estágio
-            ultima_linha = df.iloc[-1]
-
-            caq_atual = np.array([
-                ultima_linha[f"Aq {m} (mol/L)"]
-                for m in METAIS
+            current_aq = np.array([
+                last[f"{m} Aq (mol/L)"]
+                for m in METALS
             ])
 
-            h_atual = ultima_linha["H+ (mol/L)"]
+            h_in = last["H+ (mol/L)"]
 
-            caq_out, corg_out, h_out, ext_livre = (
-                calcular_estagio_extracao(
-                    caq_atual,
-                    h_atual,
-                    st.session_state["ext_monomer"],
-                    saponificacao,
-                    st.session_state["AO"]
-                )
+        if st.button(
+            "Add extraction stage",
+            type="secondary",
+            disabled=st.session_state.stop_extraction
+        ):
+
+            result = solve_extraction_stage(
+                current_aq,
+                h_in,
+                extractant_total,
+                st.session_state.extraction_sap_remaining
             )
 
-            metricas = calcular_metricas(
-                caq_atual,
-                caq_out,
-                corg_out,
-                st.session_state["caq_original"],
-                st.session_state["corte"]
+            stage = len(
+                st.session_state.extraction_history
+            ) + 1
+
+            previous_aq = current_aq.copy()
+
+            row = create_extraction_row(
+                stage,
+                result,
+                initial_aq,
+                previous_aq,
+                cut_pair
             )
 
-            estagio = int(ultima_linha["Estágio"]) + 1
-
-            linha = {
-                "Estágio": estagio,
-                "H+ (mol/L)": h_out,
-                "pH": -np.log10(max(h_out, 1e-20)),
-                "Extratatante livre dimérico (mol/L)": ext_livre
-            }
-
-            for i, m in enumerate(METAIS):
-
-                linha[f"Aq {m} (mol/L)"] = caq_out[i]
-                linha[f"Org {m} (mol/L)"] = corg_out[i]
-
-                linha[f"Extração {m} (%)"] = (
-                    metricas["Extracao_estagio"][i]
-                )
-
-                linha[f"Extração acumulada {m} (%)"] = (
-                    metricas["Extracao_acumulada"][i]
-                )
-
-            linha["Aq — leves (%)"] = metricas["Aq_%_leves"]
-            linha["Aq — pesados (%)"] = metricas["Aq_%_pesados"]
-
-            linha["Org — leves (%)"] = metricas["Org_%_leves"]
-            linha["Org — pesados (%)"] = metricas["Org_%_pesados"]
-
-            linha["Leves — Aq (%)"] = metricas["Leves_%_aq"]
-            linha["Leves — Org (%)"] = metricas["Leves_%_org"]
-
-            linha["Pesados — Aq (%)"] = metricas["Pesados_%_aq"]
-            linha["Pesados — Org (%)"] = metricas["Pesados_%_org"]
-
-            st.session_state["df_extracao"] = pd.concat(
-                [df, pd.DataFrame([linha])],
-                ignore_index=True
+            st.session_state.extraction_history.append(
+                row
             )
 
-            st.session_state["corg_extracao_final"] = corg_out
-            st.session_state["h_extracao_final"] = h_out
+            st.session_state.extraction_sap_remaining = (
+                result["sap_remaining"]
+            )
 
             st.rerun()
 
-        if parar:
+        if st.session_state.extraction_history:
 
-            st.session_state["extracao_finalizada"] = True
-
-            st.success(
-                "Extração encerrada. A carga orgânica acumulada "
-                "será encaminhada para a etapa de lavagem."
+            df_ext = pd.DataFrame(
+                st.session_state.extraction_history
             )
 
-
-# ============================================================
-# ABA 2 — LAVAGEM
-# ============================================================
-
-with abas[1]:
-
-    st.header("Lavagem")
-
-    if "corg_extracao_final" not in st.session_state:
-
-        st.warning(
-            "Execute a etapa de extração primeiro."
-        )
-
-    else:
-
-        st.info(
-            "A lavagem recebe a **carga orgânica total acumulada da extração**. "
-            "Não é adicionada nenhuma terra rara à solução de lavagem."
-        )
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            ph_lavagem = st.number_input(
-                "pH da solução de lavagem",
-                min_value=0.0,
-                max_value=7.0,
-                value=1.0,
-                step=0.1
-            )
-
-        with c2:
-            AO_lav = st.number_input(
-                "A/O da lavagem",
-                min_value=0.001,
-                value=1.0,
-                step=0.1
-            )
-
-        with c3:
-            n_lav = st.number_input(
-                "Número de estágios de lavagem",
-                min_value=1,
-                max_value=100,
-                value=5
-            )
-
-        pureza_lavagem = st.number_input(
-            "Pureza desejada dos pesados na fase orgânica (%)",
-            min_value=0.0,
-            max_value=100.0,
-            value=99.9,
-            step=0.1
-        )
-
-        corte_lavagem = st.session_state.get(
-            "corte",
-            "Nd"
-        )
-
-        if st.button(
-            "▶️ Iniciar lavagem",
-            type="primary",
-            use_container_width=True
-        ):
-
-            corg_atual = (
-                st.session_state["corg_extracao_final"]
-                .copy()
-            )
-
-            h_atual = 10 ** (-ph_lavagem)
-
-            historico_lav = []
-
-            for estagio in range(1, int(n_lav) + 1):
-
-                caq_out, corg_out, h_out, ext_livre = (
-                    calcular_estagio_lavagem(
-                        corg_atual,
-                        h_atual,
-                        st.session_state["ext_monomer"],
-                        AO_lav
-                    )
-                )
-
-                leves, pesados = obter_grupos(
-                    corte_lavagem
-                )
-
-                idx_l = [
-                    METAIS.index(m)
-                    for m in leves
-                ]
-
-                idx_p = [
-                    METAIS.index(m)
-                    for m in pesados
-                ]
-
-                mol_org_l = np.sum(corg_out[idx_l])
-                mol_org_p = np.sum(corg_out[idx_p])
-                mol_org_total = (
-                    mol_org_l + mol_org_p
-                )
-
-                pureza_pesados = percentual_seguro(
-                    mol_org_p,
-                    mol_org_total
-                )
-
-                linha = {
-                    "Estágio": estagio,
-                    "H+ (mol/L)": h_out,
-                    "pH": -np.log10(max(h_out, 1e-20)),
-                    "Extratatante livre dimérico (mol/L)": ext_livre,
-                    "Org — leves (%)": percentual_seguro(
-                        mol_org_l,
-                        mol_org_total
-                    ),
-                    "Org — pesados (%)": pureza_pesados
-                }
-
-                for i, m in enumerate(METAIS):
-
-                    linha[f"Aq {m} (mol/L)"] = caq_out[i]
-                    linha[f"Org {m} (mol/L)"] = corg_out[i]
-
-                historico_lav.append(linha)
-
-                corg_atual = corg_out
-                h_atual = h_out
-
-            df_lav = pd.DataFrame(
-                historico_lav
-            )
-
-            st.session_state["df_lavagem"] = df_lav
-            st.session_state["corg_lavagem_final"] = corg_atual
-            st.session_state["h_lavagem_final"] = h_atual
-
-        if "df_lavagem" in st.session_state:
-
-            df = st.session_state["df_lavagem"]
-
-            st.subheader("Resultados da lavagem")
-
-            opcoes = st.multiselect(
-                "Informações para exibir",
-                [
-                    "Concentração na aquosa",
-                    "Concentração na orgânica",
-                    "H+ e pH",
-                    "Extratatante livre",
-                    "Distribuição molar na orgânica"
-                ],
-                default=[
-                    "Concentração na orgânica",
-                    "Distribuição molar na orgânica"
-                ],
-                key="opcoes_lavagem"
-            )
-
-            metais_lav = st.multiselect(
-                "Metais a visualizar",
-                METAIS,
-                default=[
-                    st.session_state["corte"],
-                    obter_grupos(
-                        st.session_state["corte"]
-                    )[1][0]
-                ],
-                key="metais_lav"
-            )
-
-            tabela = pd.DataFrame()
-            tabela["Estágio"] = df["Estágio"]
-
-            if "Concentração na aquosa" in opcoes:
-
-                for m in metais_lav:
-
-                    tabela[
-                        f"Aq {m} (mol/L)"
-                    ] = df[
-                        f"Aq {m} (mol/L)"
-                    ]
-
-            if "Concentração na orgânica" in opcoes:
-
-                for m in metais_lav:
-
-                    tabela[
-                        f"Org {m} (mol/L)"
-                    ] = df[
-                        f"Org {m} (mol/L)"
-                    ]
-
-            if "H+ e pH" in opcoes:
-
-                tabela["H+ (mol/L)"] = df["H+ (mol/L)"]
-                tabela["pH"] = df["pH"]
-
-            if "Extratatante livre" in opcoes:
-
-                tabela[
-                    "Extratatante livre dimérico (mol/L)"
-                ] = df[
-                    "Extratatante livre dimérico (mol/L)"
-                ]
-
-            if "Distribuição molar na orgânica" in opcoes:
-
-                tabela["Org — leves (%)"] = df[
-                    "Org — leves (%)"
-                ]
-
-                tabela["Org — pesados (%)"] = df[
-                    "Org — pesados (%)"
-                ]
+            st.subheader("Extraction results")
 
             st.dataframe(
-                tabela,
+                df_ext,
                 use_container_width=True,
                 hide_index=True
             )
 
-            purezas = df[
-                "Org — pesados (%)"
-            ].values
+            st.subheader("Extraction graphs")
 
-            idx = None
+            selected_metals = st.multiselect(
+                "Metals to display",
+                METALS,
+                default=["Nd", "Sm"]
+            )
 
-            for i, p in enumerate(purezas):
+            if selected_metals:
 
-                if p >= pureza_lavagem:
-                    idx = i
-                    break
+                c1, c2 = st.columns(2)
 
-            if idx is not None:
+                with c1:
 
-                est = int(
-                    df.iloc[idx]["Estágio"]
+                    cols = [
+                        f"{m} Cumulative Extraction (%)"
+                        for m in selected_metals
+                    ]
+
+                    st.pyplot(
+                        plot_line_chart(
+                            df_ext,
+                            cols,
+                            "Cumulative extraction vs. stage",
+                            "Cumulative extraction (%)"
+                        ),
+                        clear_figure=True
+                    )
+
+                with c2:
+
+                    cols = [
+                        f"{m} Stage Extraction (%)"
+                        for m in selected_metals
+                    ]
+
+                    st.pyplot(
+                        plot_line_chart(
+                            df_ext,
+                            cols,
+                            "Stage extraction vs. stage",
+                            "Stage extraction (%)"
+                        ),
+                        clear_figure=True
+                    )
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.pyplot(
+                    plot_phase_composition(
+                        df_ext,
+                        "Aqueous Light (%)",
+                        "Aqueous Heavy (%)",
+                        "Aqueous phase composition"
+                    ),
+                    clear_figure=True
                 )
 
+            with c2:
+
+                st.pyplot(
+                    plot_phase_composition(
+                        df_ext,
+                        "Organic Light (%)",
+                        "Organic Heavy (%)",
+                        "Organic phase composition"
+                    ),
+                    clear_figure=True
+                )
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.pyplot(
+                    plot_group_distribution(
+                        df_ext,
+                        "Light: Aqueous (%)",
+                        "Light: Organic (%)",
+                        "Light REE distribution between phases"
+                    ),
+                    clear_figure=True
+                )
+
+            with c2:
+
+                st.pyplot(
+                    plot_group_distribution(
+                        df_ext,
+                        "Heavy: Aqueous (%)",
+                        "Heavy: Organic (%)",
+                        "Heavy REE distribution between phases"
+                    ),
+                    clear_figure=True
+                )
+
+            st.subheader(
+                "Elemental molar composition"
+            )
+
+            phase = st.radio(
+                "Phase",
+                ["Aqueous", "Organic"],
+                horizontal=True,
+                key="ext_element_phase"
+            )
+
+            st.pyplot(
+                plot_elemental_composition(
+                    df_ext,
+                    phase,
+                    f"{phase} elemental molar composition"
+                ),
+                clear_figure=True
+            )
+
+            # Current purity
+            current_purity = df_ext.iloc[-1][
+                "Aqueous Light (%)"
+            ]
+
+            if current_purity >= target_purity:
+
                 st.success(
-                    f"🎯 A pureza de {pureza_lavagem:.3f}% "
-                    f"de pesados na orgânica é atingida no "
-                    f"estágio **{est}**."
+                    f"Target purity reached: "
+                    f"{current_purity:.4f}% light REEs "
+                    f"in the aqueous phase."
                 )
 
             else:
 
                 st.warning(
-                    "A pureza desejada ainda não foi atingida."
+                    f"Current aqueous light-REE purity: "
+                    f"{current_purity:.4f}%  |  "
+                    f"Target: {target_purity:.4f}%"
                 )
 
             if st.button(
-                "🛑 Encerrar lavagem → Reextração",
-                type="primary",
-                use_container_width=True
+                "Stop extraction and continue to washing",
+                type="primary"
             ):
 
-                st.session_state[
-                    "lavagem_finalizada"
-                ] = True
+                # Build combined organic phase.
+                #
+                # Each extraction stage represents the same
+                # organic volume multiplied according to O/A.
+                #
+                # For feed volume Vaq:
+                # Vorg = Vaq / (O/A)
+                #
+                # All organic streams are then combined.
 
-                st.success(
-                    "Lavagem encerrada. A carga orgânica "
-                    "está disponível para a reextração."
+                organic_moles = np.zeros(len(METALS))
+                total_organic_volume = 0.0
+
+                stage_organic_volume = (
+                    feed_volume / oa_ratio
                 )
 
+                for row in st.session_state.extraction_history:
 
-# ============================================================
-# ABA 3 — REEXTRAÇÃO
-# ============================================================
+                    c_org = np.array([
+                        row[f"{m} Org (mol/L)"]
+                        for m in METALS
+                    ])
 
-with abas[2]:
-
-    st.header("Reextração")
-
-    if "corg_lavagem_final" not in st.session_state:
-
-        st.warning(
-            "Execute a etapa de lavagem primeiro."
-        )
-
-    else:
-
-        st.info(
-            "A reextração recebe a carga orgânica final da lavagem."
-        )
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-
-            H_acido = st.number_input(
-                "Concentração de H+ da solução ácida (mol/L)",
-                min_value=0.000001,
-                value=2.0,
-                step=0.1
-            )
-
-        with c2:
-
-            AO_reext = st.number_input(
-                "A/O da reextração",
-                min_value=0.001,
-                value=1.0,
-                step=0.1
-            )
-
-        with c3:
-
-            n_reext = st.number_input(
-                "Número de estágios de reextração",
-                min_value=1,
-                max_value=100,
-                value=5
-            )
-
-        st.markdown(
-            """
-            O objetivo da reextração é retirar os metais da fase orgânica
-            para a fase aquosa. O simulador acompanha a quantidade
-            reextraída acumulada.
-            """
-        )
-
-        if st.button(
-            "▶️ Iniciar reextração",
-            type="primary",
-            use_container_width=True
-        ):
-
-            corg_atual = (
-                st.session_state[
-                    "corg_lavagem_final"
-                ].copy()
-            )
-
-            h_atual = H_acido
-
-            corg_inicial = corg_atual.copy()
-
-            historico_reext = []
-
-            for estagio in range(
-                1,
-                int(n_reext) + 1
-            ):
-
-                caq_out, corg_out, h_out, ext_livre = (
-                    calcular_estagio_reextracao(
-                        corg_atual,
-                        h_atual,
-                        st.session_state[
-                            "ext_monomer"
-                        ],
-                        estagio == 1
+                    organic_moles += (
+                        c_org * stage_organic_volume
                     )
+
+                    total_organic_volume += (
+                        stage_organic_volume
+                    )
+
+                combined_organic = (
+                    organic_moles /
+                    max(total_organic_volume, 1e-30)
                 )
 
-                linha = {
-                    "Estágio": estagio,
-                    "H+ (mol/L)": h_out,
-                    "pH": -np.log10(
-                        max(h_out, 1e-20)
-                    ),
-                    "Extratatante livre dimérico (mol/L)": ext_livre
+                st.session_state.combined_organic = {
+                    "concentration": combined_organic,
+                    "volume": total_organic_volume,
+                    "moles": organic_moles
                 }
 
-                for i, m in enumerate(METAIS):
+                st.session_state.stop_extraction = True
 
-                    linha[
-                        f"Aq {m} (mol/L)"
-                    ] = caq_out[i]
-
-                    linha[
-                        f"Org {m} (mol/L)"
-                    ] = corg_out[i]
-
-                    linha[
-                        f"Reextração {m} (%)"
-                    ] = percentual_seguro(
-                        corg_atual[i] - corg_out[i],
-                        corg_atual[i]
-                    )
-
-                    linha[
-                        f"Reextração acumulada {m} (%)"
-                    ] = percentual_seguro(
-                        corg_inicial[i] - corg_out[i],
-                        corg_inicial[i]
-                    )
-
-                historico_reext.append(
-                    linha
+                st.success(
+                    "Extraction stopped. "
+                    "The organic streams have been combined "
+                    "and are ready for washing."
                 )
 
-                corg_atual = corg_out
-                h_atual = h_out
 
-            df_reext = pd.DataFrame(
-                historico_reext
+# ============================================================
+# WASHING PAGE
+# ============================================================
+
+elif page == "2 — Washing":
+
+    st.title("Organic Phase Washing")
+
+    if st.session_state.combined_organic is None:
+
+        st.warning(
+            "Complete and stop the extraction first."
+        )
+
+        st.stop()
+
+    combined = st.session_state.combined_organic
+
+    st.info(
+        f"Combined organic phase: "
+        f"**{combined['volume']:.4f} L**"
+    )
+
+    light, heavy = get_groups(
+        st.session_state.get(
+            "cut_pair",
+            all_cut_pairs()[3]
+        )
+    )
+
+    st.header("Washing parameters")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+
+        wash_pH = st.number_input(
+            "Washing solution pH",
+            min_value=-2.0,
+            max_value=7.0,
+            value=1.0,
+            step=0.1
+        )
+
+    with col2:
+
+        wash_ao = st.number_input(
+            "Washing O/A ratio",
+            min_value=0.001,
+            value=1.0,
+            step=0.1
+        )
+
+    with col3:
+
+        washing_extractant = st.number_input(
+            "Organic extractant concentration "
+            "(mol/L, monomer basis)",
+            min_value=0.000001,
+            value=0.5,
+            step=0.05
+        )
+
+    st.subheader("Current combined organic feed")
+
+    feed_df = pd.DataFrame({
+        "REE": METALS,
+        "Organic concentration (mol/L)": combined[
+            "concentration"
+        ],
+        "Organic amount (mol)": combined[
+            "moles"
+        ]
+    })
+
+    st.dataframe(
+        feed_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    if st.button(
+        "Start / Reset Washing",
+        type="primary"
+    ):
+
+        st.session_state.washing_history = []
+        st.session_state.washing_started = True
+        st.session_state.stop_washing = False
+        st.session_state.washing_organic_feed = (
+            combined["concentration"].copy()
+        )
+
+        st.rerun()
+
+    if st.session_state.washing_started:
+
+        if st.button(
+            "Add washing stage",
+            disabled=st.session_state.stop_washing
+        ):
+
+            corg_in = (
+                st.session_state.washing_organic_feed
             )
 
-            st.session_state[
-                "df_reextracao"
-            ] = df_reext
-
-        if "df_reextracao" in st.session_state:
-
-            df = st.session_state[
-                "df_reextracao"
-            ]
-
-            st.subheader(
-                "Resultados da reextração"
+            result = solve_washing_stage(
+                corg_in,
+                10 ** (-wash_pH),
+                washing_extractant
             )
 
-            opcoes_reext = st.multiselect(
-                "Informações para exibir",
-                [
-                    "Concentração na aquosa",
-                    "Concentração na orgânica",
-                    "Reextração no estágio",
-                    "Reextração acumulada",
-                    "H+ e pH",
-                    "Extratatante livre"
-                ],
-                default=[
-                    "Concentração na aquosa",
-                    "Reextração acumulada"
+            stage = len(
+                st.session_state.washing_history
+            ) + 1
+
+            row = {
+                "Stage": stage,
+                "pH": result["pH"],
+                "H+ (mol/L)": result["h"],
+                "Free extractant (mol/L)": result[
+                    "free_extractant"
                 ]
+            }
+
+            aq = result["caq"]
+            org = result["corg"]
+
+            initial = combined["concentration"]
+
+            for i, metal in enumerate(METALS):
+
+                removed_stage = safe_percent(
+                    corg_in[i] - org[i],
+                    corg_in[i]
+                )
+
+                removed_cumulative = safe_percent(
+                    initial[i] - org[i],
+                    initial[i]
+                )
+
+                remaining = safe_percent(
+                    org[i],
+                    initial[i]
+                )
+
+                row[
+                    f"{metal} Aq (mol/L)"
+                ] = aq[i]
+
+                row[
+                    f"{metal} Org (mol/L)"
+                ] = org[i]
+
+                row[
+                    f"{metal} Stage Removed (%)"
+                ] = removed_stage
+
+                row[
+                    f"{metal} Cumulative Removed (%)"
+                ] = removed_cumulative
+
+                row[
+                    f"{metal} Remaining in Organic (%)"
+                ] = remaining
+
+            row["Organic Light (%)"] = phase_composition(
+                org,
+                light
             )
 
-            metais_reext = st.multiselect(
-                "Metais a visualizar",
-                METAIS,
-                default=METAIS
+            row["Organic Heavy (%)"] = phase_composition(
+                org,
+                heavy
             )
 
-            tabela = pd.DataFrame()
-            tabela["Estágio"] = df["Estágio"]
+            row["Aqueous Light (%)"] = phase_composition(
+                aq,
+                light
+            )
 
-            if "Concentração na aquosa" in opcoes_reext:
+            row["Aqueous Heavy (%)"] = phase_composition(
+                aq,
+                heavy
+            )
 
-                for m in metais_reext:
+            light_aq, light_org = group_phase_distribution(
+                aq,
+                org,
+                light
+            )
 
-                    tabela[
-                        f"Aq {m} (mol/L)"
-                    ] = df[
-                        f"Aq {m} (mol/L)"
-                    ]
+            heavy_aq, heavy_org = group_phase_distribution(
+                aq,
+                org,
+                heavy
+            )
 
-            if "Concentração na orgânica" in opcoes_reext:
+            row["Light: Aqueous (%)"] = light_aq
+            row["Light: Organic (%)"] = light_org
+            row["Heavy: Aqueous (%)"] = heavy_aq
+            row["Heavy: Organic (%)"] = heavy_org
 
-                for m in metais_reext:
+            st.session_state.washing_history.append(row)
 
-                    tabela[
-                        f"Org {m} (mol/L)"
-                    ] = df[
-                        f"Org {m} (mol/L)"
-                    ]
+            st.session_state.washing_organic_feed = (
+                org.copy()
+            )
 
-            if "Reextração no estágio" in opcoes_reext:
+            st.rerun()
 
-                for m in metais_reext:
+        if st.session_state.washing_history:
 
-                    tabela[
-                        f"Reextração {m} — estágio (%)"
-                    ] = df[
-                        f"Reextração {m} (%)"
-                    ]
+            df_wash = pd.DataFrame(
+                st.session_state.washing_history
+            )
 
-            if "Reextração acumulada" in opcoes_reext:
-
-                for m in metais_reext:
-
-                    tabela[
-                        f"Reextração {m} — acumulada (%)"
-                    ] = df[
-                        f"Reextração acumulada {m} (%)"
-                    ]
-
-            if "H+ e pH" in opcoes_reext:
-
-                tabela["H+ (mol/L)"] = df[
-                    "H+ (mol/L)"
-                ]
-
-                tabela["pH"] = df[
-                    "pH"
-                ]
-
-            if "Extratatante livre" in opcoes_reext:
-
-                tabela[
-                    "Extratatante livre dimérico (mol/L)"
-                ] = df[
-                    "Extratatante livre dimérico (mol/L)"
-                ]
+            st.subheader("Washing results")
 
             st.dataframe(
-                tabela,
+                df_wash,
                 use_container_width=True,
                 hide_index=True
             )
 
-            # ------------------------------------------------
-            # CRITÉRIO DE 100%
-            # ------------------------------------------------
-
-            st.markdown("---")
-
-            st.subheader(
-                "🎯 Reextração completa"
+            selected_metals = st.multiselect(
+                "Metals to display",
+                METALS,
+                default=["Nd", "Sm"],
+                key="wash_metals"
             )
 
-            max_reext = []
+            if selected_metals:
 
-            for m in metais_reext:
+                cols = [
+                    f"{m} Cumulative Removed (%)"
+                    for m in selected_metals
+                ]
 
-                coluna = (
-                    f"Reextração acumulada {m} (%)"
+                st.pyplot(
+                    plot_line_chart(
+                        df_wash,
+                        cols,
+                        "Cumulative REE removal during washing",
+                        "Cumulative removed (%)"
+                    ),
+                    clear_figure=True
                 )
 
-                max_reext.append(
-                    df[coluna].iloc[-1]
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.pyplot(
+                    plot_phase_composition(
+                        df_wash,
+                        "Organic Light (%)",
+                        "Organic Heavy (%)",
+                        "Organic Light / Heavy composition"
+                    ),
+                    clear_figure=True
                 )
 
-            if len(max_reext) > 0:
+            with c2:
 
-                menor = min(max_reext)
+                st.pyplot(
+                    plot_phase_composition(
+                        df_wash,
+                        "Aqueous Light (%)",
+                        "Aqueous Heavy (%)",
+                        "Wash aqueous Light / Heavy composition"
+                    ),
+                    clear_figure=True
+                )
 
-                if menor >= 99.999:
+            c1, c2 = st.columns(2)
 
-                    st.success(
-                        "🎯 Todos os metais selecionados "
-                        "foram praticamente 100% reextraídos."
+            with c1:
+
+                st.pyplot(
+                    plot_group_distribution(
+                        df_wash,
+                        "Light: Aqueous (%)",
+                        "Light: Organic (%)",
+                        "Light REE distribution during washing"
+                    ),
+                    clear_figure=True
+                )
+
+            with c2:
+
+                st.pyplot(
+                    plot_group_distribution(
+                        df_wash,
+                        "Heavy: Aqueous (%)",
+                        "Heavy: Organic (%)",
+                        "Heavy REE distribution during washing"
+                    ),
+                    clear_figure=True
+                )
+
+            st.subheader(
+                "Elemental composition of the washed organic"
+            )
+
+            st.pyplot(
+                plot_elemental_composition(
+                    df_wash,
+                    "Organic",
+                    "Washed organic elemental composition"
+                ),
+                clear_figure=True
+            )
+
+            if st.button(
+                "Stop washing and continue to re-extraction",
+                type="primary"
+            ):
+
+                final_org = (
+                    st.session_state.washing_organic_feed
+                )
+
+                # Preserve the actual moles in the organic phase.
+                final_moles = (
+                    final_org * combined["volume"]
+                )
+
+                st.session_state.stripping_organic_feed = {
+                    "concentration": final_org.copy(),
+                    "volume": combined["volume"],
+                    "moles": final_moles
+                }
+
+                st.session_state.stop_washing = True
+
+                st.success(
+                    "Washing stopped. The remaining organic "
+                    "phase is ready for re-extraction."
+                )
+
+
+# ============================================================
+# RE-EXTRACTION PAGE
+# ============================================================
+
+elif page == "3 — Re-extraction":
+
+    st.title("REE Re-extraction / Stripping")
+
+    if st.session_state.stripping_organic_feed is None:
+
+        st.warning(
+            "Complete and stop the washing first."
+        )
+
+        st.stop()
+
+    feed = st.session_state.stripping_organic_feed
+
+    st.info(
+        f"Organic phase entering stripping: "
+        f"**{feed['volume']:.4f} L**"
+    )
+
+    st.header("Stripping parameters")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        stripping_H = st.number_input(
+            "Stripping solution H+ concentration (mol/L)",
+            min_value=0.000001,
+            value=2.0,
+            step=0.1
+        )
+
+    with col2:
+
+        stripping_ao = st.number_input(
+            "Stripping O/A ratio",
+            min_value=0.001,
+            value=1.0,
+            step=0.1
+        )
+
+    if st.button(
+        "Start / Reset Re-extraction",
+        type="primary"
+    ):
+
+        st.session_state.stripping_history = []
+        st.session_state.stripping_started = True
+        st.session_state.stop_stripping = False
+
+        st.session_state.stripping_organic_feed = {
+            **feed,
+            "current_concentration":
+                feed["concentration"].copy()
+        }
+
+        st.rerun()
+
+    if st.session_state.stripping_started:
+
+        if st.button(
+            "Add re-extraction stage",
+            disabled=st.session_state.stop_stripping
+        ):
+
+            current_org = (
+                st.session_state
+                .stripping_organic_feed[
+                    "current_concentration"
+                ]
+            )
+
+            result = solve_stripping_stage(
+                current_org,
+                stripping_H
+            )
+
+            stage = len(
+                st.session_state.stripping_history
+            ) + 1
+
+            row = {
+                "Stage": stage,
+                "pH": result["pH"],
+                "H+ (mol/L)": result["h"],
+                "Free extractant (mol/L)": result[
+                    "free_extractant"
+                ]
+            }
+
+            aq = result["caq"]
+            org = result["corg"]
+
+            initial = feed["concentration"]
+
+            for i, metal in enumerate(METALS):
+
+                stage_reextraction = safe_percent(
+                    current_org[i] - org[i],
+                    current_org[i]
+                )
+
+                cumulative_reextraction = safe_percent(
+                    initial[i] - org[i],
+                    initial[i]
+                )
+
+                remaining = safe_percent(
+                    org[i],
+                    initial[i]
+                )
+
+                row[
+                    f"{metal} Aq (mol/L)"
+                ] = aq[i]
+
+                row[
+                    f"{metal} Org (mol/L)"
+                ] = org[i]
+
+                row[
+                    f"{metal} Stage Re-extraction (%)"
+                ] = stage_reextraction
+
+                row[
+                    f"{metal} Cumulative Re-extraction (%)"
+                ] = cumulative_reextraction
+
+                row[
+                    f"{metal} Remaining in Organic (%)"
+                ] = remaining
+
+            st.session_state.stripping_history.append(
+                row
+            )
+
+            st.session_state.stripping_organic_feed[
+                "current_concentration"
+            ] = org.copy()
+
+            st.rerun()
+
+        if st.session_state.stripping_history:
+
+            df_strip = pd.DataFrame(
+                st.session_state.stripping_history
+            )
+
+            st.subheader("Re-extraction results")
+
+            st.dataframe(
+                df_strip,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            selected_metals = st.multiselect(
+                "Metals to display",
+                METALS,
+                default=["Nd", "Sm"],
+                key="strip_metals"
+            )
+
+            if selected_metals:
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+
+                    cols = [
+                        f"{m} Cumulative Re-extraction (%)"
+                        for m in selected_metals
+                    ]
+
+                    st.pyplot(
+                        plot_line_chart(
+                            df_strip,
+                            cols,
+                            "Cumulative re-extraction vs. stage",
+                            "Cumulative re-extraction (%)"
+                        ),
+                        clear_figure=True
                     )
 
-                else:
+                with c2:
 
-                    st.warning(
-                        f"A menor reextração acumulada entre "
-                        f"os metais selecionados foi "
-                        f"{menor:.4f}%."
+                    cols = [
+                        f"{m} Stage Re-extraction (%)"
+                        for m in selected_metals
+                    ]
+
+                    st.pyplot(
+                        plot_line_chart(
+                            df_strip,
+                            cols,
+                            "Stage re-extraction vs. stage",
+                            "Stage re-extraction (%)"
+                        ),
+                        clear_figure=True
                     )
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.pyplot(
+                    plot_group_distribution(
+                        df_strip,
+                        "Light: Aqueous (%)"
+                        if "Light: Aqueous (%)"
+                        in df_strip.columns
+                        else f"{selected_metals[0]} Aq (mol/L)",
+                        "Light: Organic (%)"
+                        if "Light: Organic (%)"
+                        in df_strip.columns
+                        else f"{selected_metals[0]} Org (mol/L)",
+                        "Re-extraction distribution"
+                    ),
+                    clear_figure=True
+                )
+
+            st.subheader(
+                "Remaining organic phase"
+            )
+
+            st.pyplot(
+                plot_elemental_composition(
+                    df_strip,
+                    "Org",
+                    "Remaining organic elemental composition"
+                ),
+                clear_figure=True
+            )
+
+            # 100% target check
+            final_values = []
+
+            for metal in METALS:
+
+                final_values.append(
+                    df_strip.iloc[-1][
+                        f"{metal} Cumulative Re-extraction (%)"
+                    ]
+                )
+
+            minimum_recovery = min(final_values)
+
+            if minimum_recovery >= 99.999:
+
+                st.success(
+                    "All REEs have effectively reached "
+                    "complete re-extraction."
+                )
+
+            else:
+
+                st.warning(
+                    f"Minimum cumulative re-extraction: "
+                    f"{minimum_recovery:.4f}%"
+                )
+
+            if st.button(
+                "Stop re-extraction",
+                type="primary"
+            ):
+
+                st.session_state.stop_stripping = True
+
+                st.success(
+                    "Re-extraction stopped."
+                )
