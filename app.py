@@ -27,8 +27,9 @@ st.set_page_config(
 
 METALS = [
     "La", "Ce", "Pr", "Nd",
-    "Sm", "Eu", "Gd", "Tb", "Dy",
-    "Ho", "Y", "Er", "Tm", "Yb", "Lu"
+    "Sm", "Eu", "Gd", "Tb",
+    "Dy", "Ho", "Y", "Er",
+    "Tm", "Yb", "Lu"
 ]
 
 KEX = {
@@ -76,21 +77,27 @@ DEFAULTS = {
     "extraction_history": [],
     "washing_history": [],
     "stripping_history": [],
+
     "extraction_feed": None,
     "combined_organic": None,
     "washing_organic_feed": None,
     "stripping_organic_feed": None,
+
     "extraction_sap_remaining": None,
+
     "extraction_started": False,
     "washing_started": False,
     "stripping_started": False,
+
     "stop_extraction": False,
     "stop_washing": False,
     "stop_stripping": False,
+
     "cut_pair": None,
 }
 
 for key, value in DEFAULTS.items():
+
     if key not in st.session_state:
         st.session_state[key] = value
 
@@ -160,19 +167,14 @@ def total_moles(concentrations, volume):
     return np.asarray(concentrations) * volume
 
 
-def group_total(conc, group):
-
-    return np.sum([
-        conc[METALS.index(m)]
-        for m in group
-    ])
-
-
 # ============================================================
 # EQUILIBRIUM MODEL
 # ============================================================
 
-def distribution_coefficients(h, free_extractant):
+def distribution_coefficients(
+    h,
+    free_extractant
+):
 
     if h <= 0:
         h = 1e-30
@@ -181,7 +183,9 @@ def distribution_coefficients(h, free_extractant):
         free_extractant = 1e-30
 
     return np.array([
-        KEX[m] * free_extractant**3 / h**3
+        KEX[m] *
+        free_extractant**3 /
+        h**3
         for m in METALS
     ])
 
@@ -195,33 +199,57 @@ def solve_extraction_stage(
 
     total_ree_in = np.sum(caq_in)
 
-    h_guess = max(h_in, 1e-8)
+    h_guess = max(
+        h_in,
+        1e-8
+    )
 
     e_guess = max(
-        extractant_total - 0.1 * 3 * total_ree_in,
+        extractant_total
+        - 0.1 * 3.0 * total_ree_in,
         extractant_total * 0.5
     )
 
     def residual(log_vars):
 
-        h_eq = np.exp(log_vars[0])
-        e_free = np.exp(log_vars[1])
+        h_eq = np.exp(
+            log_vars[0]
+        )
+
+        e_free = np.exp(
+            log_vars[1]
+        )
 
         D = distribution_coefficients(
             h_eq,
             e_free
         )
 
-        caq_eq = caq_in / (1.0 + D)
-        corg_eq = caq_in - caq_eq
-
-        extracted = np.sum(corg_eq)
-
-        e_balance = e_free - (
-            extractant_total - 3.0 * extracted
+        caq_eq = (
+            caq_in /
+            (1.0 + D)
         )
 
-        h_generated = 3.0 * extracted
+        corg_eq = (
+            caq_in -
+            caq_eq
+        )
+
+        extracted = np.sum(
+            corg_eq
+        )
+
+        e_balance = (
+            e_free -
+            (
+                extractant_total
+                - 3.0 * extracted
+            )
+        )
+
+        h_generated = (
+            3.0 * extracted
+        )
 
         neutralized = min(
             h_generated,
@@ -234,7 +262,10 @@ def solve_extraction_stage(
             - neutralized
         )
 
-        h_balance = h_eq - h_expected
+        h_balance = (
+            h_eq -
+            h_expected
+        )
 
         scale_e = max(
             extractant_total,
@@ -263,20 +294,36 @@ def solve_extraction_stage(
         max_nfev=5000
     )
 
-    h_eq = np.exp(result.x[0])
-    e_free = np.exp(result.x[1])
+    h_eq = np.exp(
+        result.x[0]
+    )
+
+    e_free = np.exp(
+        result.x[1]
+    )
 
     D = distribution_coefficients(
         h_eq,
         e_free
     )
 
-    caq_eq = caq_in / (1.0 + D)
-    corg_eq = caq_in - caq_eq
+    caq_eq = (
+        caq_in /
+        (1.0 + D)
+    )
 
-    extracted = np.sum(corg_eq)
+    corg_eq = (
+        caq_in -
+        caq_eq
+    )
 
-    h_generated = 3.0 * extracted
+    extracted = np.sum(
+        corg_eq
+    )
+
+    h_generated = (
+        3.0 * extracted
+    )
 
     neutralized = min(
         h_generated,
@@ -285,7 +332,8 @@ def solve_extraction_stage(
 
     sap_remaining = max(
         0.0,
-        saponified_capacity - neutralized
+        saponified_capacity
+        - neutralized
     )
 
     return {
@@ -331,24 +379,31 @@ def solve_washing_stage(
             e_free
         )
 
-        caq_eq = corg_in / (
-            1.0 + D
+        caq_eq = (
+            corg_in /
+            (1.0 + D)
         )
 
-        corg_eq = corg_in - caq_eq
+        corg_eq = (
+            corg_in -
+            caq_eq
+        )
 
         metal_to_aq = np.sum(
-            corg_in - corg_eq
+            corg_in -
+            corg_eq
         )
 
         h_new = max(
             1e-12,
-            h_wash + 3.0 * metal_to_aq
+            h_wash
+            + 3.0 * metal_to_aq
         )
 
         e_new = max(
             1e-12,
-            extractant_in + 3.0 * metal_to_aq
+            extractant_in
+            + 3.0 * metal_to_aq
         )
 
         if (
@@ -373,11 +428,15 @@ def solve_washing_stage(
         e_free
     )
 
-    caq_eq = corg_in / (
-        1.0 + D
+    caq_eq = (
+        corg_in /
+        (1.0 + D)
     )
 
-    corg_eq = corg_in - caq_eq
+    corg_eq = (
+        corg_in -
+        caq_eq
+    )
 
     return {
         "caq": caq_eq,
@@ -418,24 +477,31 @@ def solve_stripping_stage(
             e_free
         )
 
-        caq_eq = corg_in / (
-            D + 1.0
+        caq_eq = (
+            corg_in /
+            (D + 1.0)
         )
 
-        corg_eq = corg_in - caq_eq
+        corg_eq = (
+            corg_in -
+            caq_eq
+        )
 
         stripped = np.sum(
-            corg_in - corg_eq
+            corg_in -
+            corg_eq
         )
 
         h_new = max(
             1e-12,
-            h_acid - 3.0 * stripped
+            h_acid
+            - 3.0 * stripped
         )
 
         if abs(
             h_new - h_eq
         ) < 1e-12:
+
             break
 
         h_eq = (
@@ -448,15 +514,19 @@ def solve_stripping_stage(
         e_free
     )
 
-    caq_f = corg_in / (
-        D + 1.0
+    caq_eq = (
+        corg_in /
+        (D + 1.0)
     )
 
-    corg_f = corg_in - caq_f
+    corg_eq = (
+        corg_in -
+        caq_eq
+    )
 
     return {
-        "caq": caq_f,
-        "corg": corg_f,
+        "caq": caq_eq,
+        "corg": corg_eq,
         "h": h_eq,
         "pH": -np.log10(
             max(h_eq, 1e-30)
@@ -475,15 +545,25 @@ def phase_composition(
     group
 ):
 
-    total = np.sum(conc)
+    total = np.sum(
+        conc
+    )
 
     if total <= 1e-30:
         return 0.0
 
-    return 100.0 * np.sum([
-        conc[METALS.index(m)]
+    group_total = np.sum([
+        conc[
+            METALS.index(m)
+        ]
         for m in group
-    ]) / total
+    ])
+
+    return (
+        100.0 *
+        group_total /
+        total
+    )
 
 
 def group_phase_distribution(
@@ -493,16 +573,23 @@ def group_phase_distribution(
 ):
 
     aq_total = np.sum([
-        aq[METALS.index(m)]
+        aq[
+            METALS.index(m)
+        ]
         for m in group
     ])
 
     org_total = np.sum([
-        org[METALS.index(m)]
+        org[
+            METALS.index(m)
+        ]
         for m in group
     ])
 
-    total = aq_total + org_total
+    total = (
+        aq_total +
+        org_total
+    )
 
     if total <= 1e-30:
         return 0.0, 0.0
@@ -534,23 +621,41 @@ def create_extraction_row(
 
     row = {
         "Stage": stage,
-        "pH": result["pH"],
-        "H+ (mol/L)": result["h"],
-        "Free extractant (mol/L)": result[
-            "free_extractant"
-        ],
+
+        "pH":
+            result["pH"],
+
+        "H+ (mol/L)":
+            result["h"],
+
+        "Free extractant (mol/L)":
+            result[
+                "free_extractant"
+            ],
 
         "Aqueous Light (%)":
-            phase_composition(aq, light),
+            phase_composition(
+                aq,
+                light
+            ),
 
         "Aqueous Heavy (%)":
-            phase_composition(aq, heavy),
+            phase_composition(
+                aq,
+                heavy
+            ),
 
         "Organic Light (%)":
-            phase_composition(org, light),
+            phase_composition(
+                org,
+                light
+            ),
 
         "Organic Heavy (%)":
-            phase_composition(org, heavy),
+            phase_composition(
+                org,
+                heavy
+            ),
     }
 
     light_aq, light_org = (
@@ -569,96 +674,41 @@ def create_extraction_row(
         )
     )
 
-    row["Light: Aqueous (%)"] = light_aq
-    row["Light: Organic (%)"] = light_org
-    row["Heavy: Aqueous (%)"] = heavy_aq
-    row["Heavy: Organic (%)"] = heavy_org
+    row[
+        "Light: Aqueous (%)"
+    ] = light_aq
 
-    # --------------------------------------------------------
-    # GROUP EXTRACTION METRICS
-    # --------------------------------------------------------
+    row[
+        "Light: Organic (%)"
+    ] = light_org
 
-    initial_light = group_total(
-        initial_aq,
-        light
-    )
+    row[
+        "Heavy: Aqueous (%)"
+    ] = heavy_aq
 
-    previous_light = group_total(
-        previous_aq,
-        light
-    )
+    row[
+        "Heavy: Organic (%)"
+    ] = heavy_org
 
-    current_light = group_total(
-        aq,
-        light
-    )
-
-    initial_heavy = group_total(
-        initial_aq,
-        heavy
-    )
-
-    previous_heavy = group_total(
-        previous_aq,
-        heavy
-    )
-
-    current_heavy = group_total(
-        aq,
-        heavy
-    )
-
-    # Light
-    row["Light Stage Extraction (%)"] = safe_percent(
-        previous_light - current_light,
-        previous_light
-    )
-
-    row["Light Cumulative Extraction (%)"] = safe_percent(
-        initial_light - current_light,
-        initial_light
-    )
-
-    row["Light Remaining in Aqueous (%)"] = safe_percent(
-        current_light,
-        initial_light
-    )
-
-    # Heavy
-    row["Heavy Stage Extraction (%)"] = safe_percent(
-        previous_heavy - current_heavy,
-        previous_heavy
-    )
-
-    row["Heavy Cumulative Extraction (%)"] = safe_percent(
-        initial_heavy - current_heavy,
-        initial_heavy
-    )
-
-    row["Heavy Remaining in Aqueous (%)"] = safe_percent(
-        current_heavy,
-        initial_heavy
-    )
-
-    # --------------------------------------------------------
-    # INDIVIDUAL METALS
-    # --------------------------------------------------------
-
-    for i, metal in enumerate(METALS):
+    for i, metal in enumerate(
+        METALS
+    ):
 
         stage_extraction = safe_percent(
-            previous_aq[i] - aq[i],
+            previous_aq[i] -
+            aq[i],
             previous_aq[i]
         )
 
         cumulative_extraction = safe_percent(
-            initial_aq[i] - aq[i],
+            initial_aq[i] -
+            aq[i],
             initial_aq[i]
         )
 
-        remaining = safe_percent(
-            aq[i],
-            initial_aq[i]
+        remaining = (
+            100.0 -
+            cumulative_extraction
         )
 
         row[
@@ -680,6 +730,102 @@ def create_extraction_row(
         row[
             f"{metal} Remaining in Aqueous (%)"
         ] = remaining
+
+    # --------------------------------------------------------
+    # Group extraction metrics
+    # --------------------------------------------------------
+
+    initial_light = np.sum([
+        initial_aq[
+            METALS.index(m)
+        ]
+        for m in light
+    ])
+
+    previous_light = np.sum([
+        previous_aq[
+            METALS.index(m)
+        ]
+        for m in light
+    ])
+
+    current_light = np.sum([
+        aq[
+            METALS.index(m)
+        ]
+        for m in light
+    ])
+
+    initial_heavy = np.sum([
+        initial_aq[
+            METALS.index(m)
+        ]
+        for m in heavy
+    ])
+
+    previous_heavy = np.sum([
+        previous_aq[
+            METALS.index(m)
+        ]
+        for m in heavy
+    ])
+
+    current_heavy = np.sum([
+        aq[
+            METALS.index(m)
+        ]
+        for m in heavy
+    ])
+
+    row[
+        "Light Stage Extraction (%)"
+    ] = safe_percent(
+        previous_light -
+        current_light,
+        previous_light
+    )
+
+    row[
+        "Light Cumulative Extraction (%)"
+    ] = safe_percent(
+        initial_light -
+        current_light,
+        initial_light
+    )
+
+    row[
+        "Light Remaining in Aqueous (%)"
+    ] = (
+        100.0 -
+        row[
+            "Light Cumulative Extraction (%)"
+        ]
+    )
+
+    row[
+        "Heavy Stage Extraction (%)"
+    ] = safe_percent(
+        previous_heavy -
+        current_heavy,
+        previous_heavy
+    )
+
+    row[
+        "Heavy Cumulative Extraction (%)"
+    ] = safe_percent(
+        initial_heavy -
+        current_heavy,
+        initial_heavy
+    )
+
+    row[
+        "Heavy Remaining in Aqueous (%)"
+    ] = (
+        100.0 -
+        row[
+            "Heavy Cumulative Extraction (%)"
+        ]
+    )
 
     return row
 
@@ -710,9 +856,17 @@ def plot_line_chart(
                 label=col
             )
 
-    ax.set_title(title)
-    ax.set_xlabel("Stage")
-    ax.set_ylabel(ylabel)
+    ax.set_title(
+        title
+    )
+
+    ax.set_xlabel(
+        "Stage"
+    )
+
+    ax.set_ylabel(
+        ylabel
+    )
 
     ax.grid(
         alpha=0.25
@@ -764,7 +918,9 @@ def plot_group_distribution(
         label="Organic"
     )
 
-    ax.set_xticks(x)
+    ax.set_xticks(
+        x
+    )
 
     ax.set_xticklabels(
         df["Stage"].astype(str)
@@ -775,12 +931,17 @@ def plot_group_distribution(
         100
     )
 
-    ax.set_xlabel("Stage")
+    ax.set_xlabel(
+        "Stage"
+    )
+
     ax.set_ylabel(
         "Distribution (%)"
     )
 
-    ax.set_title(title)
+    ax.set_title(
+        title
+    )
 
     ax.legend()
 
@@ -825,7 +986,9 @@ def plot_phase_composition(
         label="Heavy REEs"
     )
 
-    ax.set_xticks(x)
+    ax.set_xticks(
+        x
+    )
 
     ax.set_xticklabels(
         df["Stage"].astype(str)
@@ -836,12 +999,17 @@ def plot_phase_composition(
         100
     )
 
-    ax.set_xlabel("Stage")
+    ax.set_xlabel(
+        "Stage"
+    )
+
     ax.set_ylabel(
         "Molar composition (%)"
     )
 
-    ax.set_title(title)
+    ax.set_title(
+        title
+    )
 
     ax.legend()
 
@@ -864,7 +1032,9 @@ def plot_elemental_composition(
         len(df)
     )
 
-    cmap = plt.get_cmap("tab20")
+    cmap = plt.get_cmap(
+        "tab20"
+    )
 
     bottom = np.zeros(
         len(df)
@@ -876,46 +1046,43 @@ def plot_elemental_composition(
 
     phase_columns = {}
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # Extraction uses "Aq" while washing/stripping use "Org".
-    # --------------------------------------------------------
-
-    phase_suffix = {
-        "Aqueous": "Aq",
-        "Organic": "Org",
-        "Aq": "Aq",
-        "Org": "Org"
-    }
-
-    suffix = phase_suffix.get(
-        phase,
-        phase
-    )
-
     for metal in METALS:
 
-        col = f"{metal} {suffix} (mol/L)"
+        col = (
+            f"{metal} "
+            f"{phase} "
+            "(mol/L)"
+        )
 
         if col in df.columns:
 
-            values = df[col].values
+            values = df[
+                col
+            ].values
 
-            phase_columns[metal] = values
+            phase_columns[
+                metal
+            ] = values
 
             totals += values
 
-    for i, metal in enumerate(METALS):
+    for i, metal in enumerate(
+        METALS
+    ):
 
         if metal not in phase_columns:
             continue
 
-        values = phase_columns[metal]
+        values = phase_columns[
+            metal
+        ]
 
         percentages = np.divide(
             values,
             totals,
-            out=np.zeros_like(values),
+            out=np.zeros_like(
+                values
+            ),
             where=totals > 0
         ) * 100.0
 
@@ -929,7 +1096,9 @@ def plot_elemental_composition(
 
         bottom += percentages
 
-    ax.set_xticks(x)
+    ax.set_xticks(
+        x
+    )
 
     ax.set_xticklabels(
         df["Stage"].astype(str)
@@ -940,13 +1109,17 @@ def plot_elemental_composition(
         100
     )
 
-    ax.set_xlabel("Stage")
+    ax.set_xlabel(
+        "Stage"
+    )
 
     ax.set_ylabel(
         "Molar composition (%)"
     )
 
-    ax.set_title(title)
+    ax.set_title(
+        title
+    )
 
     ax.legend(
         bbox_to_anchor=(1.02, 1),
@@ -960,275 +1133,12 @@ def plot_elemental_composition(
 
 
 # ============================================================
-# TABLE DISPLAY HELPERS
-# ============================================================
-
-def extraction_table_selector(df):
-
-    basic_options = [
-        "pH",
-        "H+ (mol/L)",
-        "Free extractant (mol/L)"
-    ]
-
-    phase_options = [
-        "Aqueous Light (%)",
-        "Aqueous Heavy (%)",
-        "Organic Light (%)",
-        "Organic Heavy (%)",
-        "Light: Aqueous (%)",
-        "Light: Organic (%)",
-        "Heavy: Aqueous (%)",
-        "Heavy: Organic (%)"
-    ]
-
-    group_options = [
-        "Light Stage Extraction (%)",
-        "Light Cumulative Extraction (%)",
-        "Light Remaining in Aqueous (%)",
-        "Heavy Stage Extraction (%)",
-        "Heavy Cumulative Extraction (%)",
-        "Heavy Remaining in Aqueous (%)"
-    ]
-
-    st.markdown("### Table display")
-
-    selected_basic = st.multiselect(
-        "Process information",
-        basic_options,
-        default=basic_options,
-        key="ext_basic_table"
-    )
-
-    selected_phase = st.multiselect(
-        "Phase and group distributions",
-        phase_options,
-        default=phase_options,
-        key="ext_phase_table"
-    )
-
-    selected_groups = st.multiselect(
-        "Light / Heavy group extraction",
-        group_options,
-        default=group_options,
-        key="ext_group_table"
-    )
-
-    selected_metals = st.multiselect(
-        "Individual REE information",
-        METALS,
-        default=["Nd", "Sm"],
-        key="ext_table_metals"
-    )
-
-    selected_metal_metrics = st.multiselect(
-        "Individual REE metrics",
-        [
-            "Aqueous concentration",
-            "Organic concentration",
-            "Stage extraction",
-            "Cumulative extraction",
-            "Remaining in aqueous"
-        ],
-        default=[
-            "Aqueous concentration",
-            "Organic concentration",
-            "Stage extraction",
-            "Cumulative extraction",
-            "Remaining in aqueous"
-        ],
-        key="ext_metal_metrics"
-    )
-
-    columns = ["Stage"]
-
-    columns += selected_basic
-    columns += selected_phase
-    columns += selected_groups
-
-    for metal in selected_metals:
-
-        if "Aqueous concentration" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Aq (mol/L)"
-            )
-
-        if "Organic concentration" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Org (mol/L)"
-            )
-
-        if "Stage extraction" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Stage Extraction (%)"
-            )
-
-        if "Cumulative extraction" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Cumulative Extraction (%)"
-            )
-
-        if "Remaining in aqueous" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Remaining in Aqueous (%)"
-            )
-
-    columns = [
-        c for c in columns
-        if c in df.columns
-    ]
-
-    return df[columns]
-
-
-def washing_stripping_table_selector(
-    df,
-    process_name,
-    key_prefix
-):
-
-    basic_options = [
-        "pH",
-        "H+ (mol/L)",
-        "Free extractant (mol/L)"
-    ]
-
-    phase_options = [
-        "Organic Light (%)",
-        "Organic Heavy (%)",
-        "Aqueous Light (%)",
-        "Aqueous Heavy (%)",
-        "Light: Aqueous (%)",
-        "Light: Organic (%)",
-        "Heavy: Aqueous (%)",
-        "Heavy: Organic (%)"
-    ]
-
-    group_options = [
-        "Light Stage Removal (%)",
-        "Light Global Stage Removal (%)",
-        "Light Sequence Cumulative Removal (%)",
-        "Light Global Cumulative Removal (%)",
-        "Light Remaining in Sequence (%)",
-        "Light Remaining Globally (%)",
-
-        "Heavy Stage Removal (%)",
-        "Heavy Global Stage Removal (%)",
-        "Heavy Sequence Cumulative Removal (%)",
-        "Heavy Global Cumulative Removal (%)",
-        "Heavy Remaining in Sequence (%)",
-        "Heavy Remaining Globally (%)"
-    ]
-
-    st.markdown("### Table display")
-
-    selected_basic = st.multiselect(
-        "Process information",
-        basic_options,
-        default=basic_options,
-        key=f"{key_prefix}_basic"
-    )
-
-    selected_phase = st.multiselect(
-        "Phase and group distributions",
-        phase_options,
-        default=phase_options,
-        key=f"{key_prefix}_phase"
-    )
-
-    selected_groups = st.multiselect(
-        "Light / Heavy group metrics",
-        group_options,
-        default=group_options,
-        key=f"{key_prefix}_groups"
-    )
-
-    selected_metals = st.multiselect(
-        "Individual REE information",
-        METALS,
-        default=["Nd", "Sm"],
-        key=f"{key_prefix}_metals"
-    )
-
-    selected_metal_metrics = st.multiselect(
-        "Individual REE metrics",
-        [
-            "Aqueous concentration",
-            "Organic concentration",
-            "Stage removal",
-            "Sequence cumulative removal",
-            "Global cumulative removal",
-            "Remaining in sequence",
-            "Remaining globally"
-        ],
-        default=[
-            "Aqueous concentration",
-            "Organic concentration",
-            "Stage removal",
-            "Sequence cumulative removal",
-            "Global cumulative removal",
-            "Remaining in sequence",
-            "Remaining globally"
-        ],
-        key=f"{key_prefix}_metal_metrics"
-    )
-
-    columns = ["Stage"]
-
-    columns += selected_basic
-    columns += selected_phase
-    columns += selected_groups
-
-    for metal in selected_metals:
-
-        if "Aqueous concentration" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Aq (mol/L)"
-            )
-
-        if "Organic concentration" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Org (mol/L)"
-            )
-
-        if "Stage removal" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Stage Removed (%)"
-            )
-
-        if "Sequence cumulative removal" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Sequence Cumulative Removed (%)"
-            )
-
-        if "Global cumulative removal" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Global Cumulative Removed (%)"
-            )
-
-        if "Remaining in sequence" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Remaining in Sequence (%)"
-            )
-
-        if "Remaining globally" in selected_metal_metrics:
-            columns.append(
-                f"{metal} Remaining Globally (%)"
-            )
-
-    columns = [
-        c for c in columns
-        if c in df.columns
-    ]
-
-    return df[columns]
-
-
-# ============================================================
 # SIDEBAR
 # ============================================================
 
-st.sidebar.title("Simulation")
+st.sidebar.title(
+    "Simulation"
+)
 
 page = st.sidebar.radio(
     "Process",
@@ -1251,8 +1161,8 @@ if page == "1 — Extraction":
     )
 
     st.caption(
-        "Counter-current separation is represented "
-        "as sequential equilibrium contacts."
+        "Sequential equilibrium contacts are used "
+        "to represent the extraction stages."
     )
 
     st.header(
@@ -1299,11 +1209,17 @@ if page == "1 — Extraction":
 
     cols = st.columns(5)
 
-    for i, metal in enumerate(METALS):
+    for i, metal in enumerate(
+        METALS
+    ):
 
-        with cols[i % 5]:
+        with cols[
+            i % 5
+        ]:
 
-            feed_values[metal] = st.number_input(
+            feed_values[
+                metal
+            ] = st.number_input(
                 f"{metal} ({concentration_unit})",
                 min_value=0.0,
                 value=0.0,
@@ -1364,7 +1280,9 @@ if page == "1 — Extraction":
         step=0.1
     )
 
-    st.session_state.cut_pair = cut_pair
+    st.session_state.cut_pair = (
+        cut_pair
+    )
 
     light, heavy = get_groups(
         cut_pair
@@ -1403,6 +1321,7 @@ if page == "1 — Extraction":
         )
 
         st.session_state.extraction_started = True
+
         st.session_state.stop_extraction = False
 
         st.session_state.combined_organic = None
@@ -1419,10 +1338,12 @@ if page == "1 — Extraction":
             st.session_state.extraction_history
         ) == 0:
 
-            current_aq = initial_aq.copy()
+            current_aq = (
+                initial_aq.copy()
+            )
 
-            h_in = 10 ** (
-                -initial_pH
+            h_in = (
+                10 ** (-initial_pH)
             )
 
         else:
@@ -1480,7 +1401,9 @@ if page == "1 — Extraction":
             )
 
             st.session_state.extraction_sap_remaining = (
-                result["sap_remaining"]
+                result[
+                    "sap_remaining"
+                ]
             )
 
             st.rerun()
@@ -1495,13 +1418,152 @@ if page == "1 — Extraction":
                 "Extraction results"
             )
 
-            # NEW: selectable table
-            df_ext_display = extraction_table_selector(
-                df_ext
+            extraction_options = [
+                "Concentrations",
+                "H+ and pH",
+                "Free extractant",
+                "Metal stage extraction",
+                "Metal cumulative extraction",
+                "Metal remaining in aqueous",
+                "Group stage extraction",
+                "Group cumulative extraction",
+                "Group remaining in aqueous",
+                "Aqueous Light / Heavy composition",
+                "Organic Light / Heavy composition",
+                "Light distribution between phases",
+                "Heavy distribution between phases"
+            ]
+
+            selected_extraction_table = st.multiselect(
+                "Select information to display in the table",
+                extraction_options,
+                default=[
+                    "Concentrations",
+                    "H+ and pH",
+                    "Free extractant",
+                    "Metal cumulative extraction",
+                    "Metal remaining in aqueous",
+                    "Group cumulative extraction",
+                    "Group remaining in aqueous",
+                    "Aqueous Light / Heavy composition",
+                    "Organic Light / Heavy composition",
+                    "Light distribution between phases",
+                    "Heavy distribution between phases"
+                ],
+                key="extraction_table_options"
             )
 
+            base_columns = [
+                "Stage"
+            ]
+
+            display_columns = base_columns.copy()
+
+            if "H+ and pH" in selected_extraction_table:
+
+                display_columns += [
+                    "pH",
+                    "H+ (mol/L)"
+                ]
+
+            if "Free extractant" in selected_extraction_table:
+
+                display_columns.append(
+                    "Free extractant (mol/L)"
+                )
+
+            if "Concentrations" in selected_extraction_table:
+
+                for metal in METALS:
+
+                    display_columns += [
+                        f"{metal} Aq (mol/L)",
+                        f"{metal} Org (mol/L)"
+                    ]
+
+            if "Metal stage extraction" in selected_extraction_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Stage Extraction (%)"
+                    )
+
+            if "Metal cumulative extraction" in selected_extraction_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Cumulative Extraction (%)"
+                    )
+
+            if "Metal remaining in aqueous" in selected_extraction_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Remaining in Aqueous (%)"
+                    )
+
+            if "Group stage extraction" in selected_extraction_table:
+
+                display_columns += [
+                    "Light Stage Extraction (%)",
+                    "Heavy Stage Extraction (%)"
+                ]
+
+            if "Group cumulative extraction" in selected_extraction_table:
+
+                display_columns += [
+                    "Light Cumulative Extraction (%)",
+                    "Heavy Cumulative Extraction (%)"
+                ]
+
+            if "Group remaining in aqueous" in selected_extraction_table:
+
+                display_columns += [
+                    "Light Remaining in Aqueous (%)",
+                    "Heavy Remaining in Aqueous (%)"
+                ]
+
+            if "Aqueous Light / Heavy composition" in selected_extraction_table:
+
+                display_columns += [
+                    "Aqueous Light (%)",
+                    "Aqueous Heavy (%)"
+                ]
+
+            if "Organic Light / Heavy composition" in selected_extraction_table:
+
+                display_columns += [
+                    "Organic Light (%)",
+                    "Organic Heavy (%)"
+                ]
+
+            if "Light distribution between phases" in selected_extraction_table:
+
+                display_columns += [
+                    "Light: Aqueous (%)",
+                    "Light: Organic (%)"
+                ]
+
+            if "Heavy distribution between phases" in selected_extraction_table:
+
+                display_columns += [
+                    "Heavy: Aqueous (%)",
+                    "Heavy: Organic (%)"
+                ]
+
+            display_columns = [
+                col
+                for col in display_columns
+                if col in df_ext.columns
+            ]
+
             st.dataframe(
-                df_ext_display,
+                df_ext[
+                    display_columns
+                ],
                 use_container_width=True,
                 hide_index=True
             )
@@ -1510,14 +1572,14 @@ if page == "1 — Extraction":
                 "Extraction graphs"
             )
 
-            selected_metals_graph = st.multiselect(
+            selected_metals = st.multiselect(
                 "Metals to display",
                 METALS,
                 default=["Nd", "Sm"],
-                key="ext_graph_metals"
+                key="ext_metals"
             )
 
-            if selected_metals_graph:
+            if selected_metals:
 
                 c1, c2 = st.columns(2)
 
@@ -1525,7 +1587,7 @@ if page == "1 — Extraction":
 
                     cols = [
                         f"{m} Cumulative Extraction (%)"
-                        for m in selected_metals_graph
+                        for m in selected_metals
                     ]
 
                     st.pyplot(
@@ -1542,7 +1604,7 @@ if page == "1 — Extraction":
 
                     cols = [
                         f"{m} Stage Extraction (%)"
-                        for m in selected_metals_graph
+                        for m in selected_metals
                     ]
 
                     st.pyplot(
@@ -1662,7 +1724,8 @@ if page == "1 — Extraction":
                 total_organic_volume = 0.0
 
                 stage_organic_volume = (
-                    feed_volume / oa_ratio
+                    feed_volume /
+                    oa_ratio
                 )
 
                 for row in (
@@ -1678,8 +1741,8 @@ if page == "1 — Extraction":
                     ])
 
                     organic_moles += (
-                        c_org
-                        * stage_organic_volume
+                        c_org *
+                        stage_organic_volume
                     )
 
                     total_organic_volume += (
@@ -1687,8 +1750,8 @@ if page == "1 — Extraction":
                     )
 
                 combined_organic = (
-                    organic_moles
-                    / max(
+                    organic_moles /
+                    max(
                         total_organic_volume,
                         1e-30
                     )
@@ -1706,19 +1769,20 @@ if page == "1 — Extraction":
                     ]
 
                     extractant_moles += (
-                        e_free
-                        * stage_organic_volume
+                        e_free *
+                        stage_organic_volume
                     )
 
                 combined_extractant = (
-                    extractant_moles
-                    / max(
+                    extractant_moles /
+                    max(
                         total_organic_volume,
                         1e-30
                     )
                 )
 
                 st.session_state.combined_organic = {
+
                     "concentration":
                         combined_organic,
 
@@ -1754,7 +1818,10 @@ elif page == "2 — Washing":
         "Organic Phase Washing"
     )
 
-    if st.session_state.combined_organic is None:
+    if (
+        st.session_state.combined_organic
+        is None
+    ):
 
         st.warning(
             "Complete and stop the extraction first."
@@ -1821,8 +1888,7 @@ elif page == "2 — Washing":
     st.caption(
         "The washing operation uses the organic phase "
         "obtained from the extraction. Its extractant "
-        "concentration is calculated automatically from "
-        "the combined organic streams."
+        "concentration is calculated automatically."
     )
 
     st.subheader(
@@ -1830,7 +1896,9 @@ elif page == "2 — Washing":
     )
 
     feed_df = pd.DataFrame({
-        "REE": METALS,
+
+        "REE":
+            METALS,
 
         "Organic concentration (mol/L)":
             combined["concentration"],
@@ -1897,161 +1965,47 @@ elif page == "2 — Washing":
             )
 
             row = {
-                "Stage": stage,
-                "pH": result["pH"],
-                "H+ (mol/L)": result["h"],
+
+                "Stage":
+                    stage,
+
+                "pH":
+                    result["pH"],
+
+                "H+ (mol/L)":
+                    result["h"],
+
                 "Free extractant (mol/L)":
-                    result["free_extractant"]
+                    result[
+                        "free_extractant"
+                    ]
             }
 
-            aq = result["caq"]
-            org = result["corg"]
+            aq = result[
+                "caq"
+            ]
+
+            org = result[
+                "corg"
+            ]
 
             initial = combined[
                 "concentration"
             ]
-
-            # ------------------------------------------------
-            # GROUP TOTALS
-            # ------------------------------------------------
-
-            initial_light = group_total(
-                initial,
-                light
-            )
-
-            previous_light = group_total(
-                corg_in,
-                light
-            )
-
-            current_light = group_total(
-                org,
-                light
-            )
-
-            initial_heavy = group_total(
-                initial,
-                heavy
-            )
-
-            previous_heavy = group_total(
-                corg_in,
-                heavy
-            )
-
-            current_heavy = group_total(
-                org,
-                heavy
-            )
-
-            # ------------------------------------------------
-            # LIGHT GROUP
-            # ------------------------------------------------
-
-            row[
-                "Light Stage Removal (%)"
-            ] = safe_percent(
-                previous_light - current_light,
-                previous_light
-            )
-
-            row[
-                "Light Global Stage Removal (%)"
-            ] = safe_percent(
-                previous_light - current_light,
-                initial_light
-            )
-
-            row[
-                "Light Sequence Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_light - current_light,
-                initial_light
-            )
-
-            row[
-                "Light Global Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_light - current_light,
-                initial_light
-            )
-
-            row[
-                "Light Remaining in Sequence (%)"
-            ] = safe_percent(
-                current_light,
-                initial_light
-            )
-
-            row[
-                "Light Remaining Globally (%)"
-            ] = safe_percent(
-                current_light,
-                initial_light
-            )
-
-            # ------------------------------------------------
-            # HEAVY GROUP
-            # ------------------------------------------------
-
-            row[
-                "Heavy Stage Removal (%)"
-            ] = safe_percent(
-                previous_heavy - current_heavy,
-                previous_heavy
-            )
-
-            row[
-                "Heavy Global Stage Removal (%)"
-            ] = safe_percent(
-                previous_heavy - current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Sequence Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_heavy - current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Global Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_heavy - current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Remaining in Sequence (%)"
-            ] = safe_percent(
-                current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Remaining Globally (%)"
-            ] = safe_percent(
-                current_heavy,
-                initial_heavy
-            )
-
-            # ------------------------------------------------
-            # INDIVIDUAL METALS
-            # ------------------------------------------------
 
             for i, metal in enumerate(
                 METALS
             ):
 
                 stage_removed = safe_percent(
-                    corg_in[i] - org[i],
+                    corg_in[i] -
+                    org[i],
                     corg_in[i]
                 )
 
                 cumulative_removed = safe_percent(
-                    initial[i] - org[i],
+                    initial[i] -
+                    org[i],
                     initial[i]
                 )
 
@@ -2073,19 +2027,11 @@ elif page == "2 — Washing":
                 ] = stage_removed
 
                 row[
-                    f"{metal} Sequence Cumulative Removed (%)"
+                    f"{metal} Cumulative Removed (%)"
                 ] = cumulative_removed
 
                 row[
-                    f"{metal} Global Cumulative Removed (%)"
-                ] = cumulative_removed
-
-                row[
-                    f"{metal} Remaining in Sequence (%)"
-                ] = remaining
-
-                row[
-                    f"{metal} Remaining Globally (%)"
+                    f"{metal} Remaining in Organic (%)"
                 ] = remaining
 
             row[
@@ -2148,6 +2094,102 @@ elif page == "2 — Washing":
                 "Heavy: Organic (%)"
             ] = heavy_org
 
+            # ------------------------------------------------
+            # Group-level washing metrics
+            # ------------------------------------------------
+
+            initial_light = np.sum([
+                initial[
+                    METALS.index(m)
+                ]
+                for m in light
+            ])
+
+            previous_light = np.sum([
+                corg_in[
+                    METALS.index(m)
+                ]
+                for m in light
+            ])
+
+            current_light = np.sum([
+                org[
+                    METALS.index(m)
+                ]
+                for m in light
+            ])
+
+            initial_heavy = np.sum([
+                initial[
+                    METALS.index(m)
+                ]
+                for m in heavy
+            ])
+
+            previous_heavy = np.sum([
+                corg_in[
+                    METALS.index(m)
+                ]
+                for m in heavy
+            ])
+
+            current_heavy = np.sum([
+                org[
+                    METALS.index(m)
+                ]
+                for m in heavy
+            ])
+
+            row[
+                "Light Stage Removed (%)"
+            ] = safe_percent(
+                previous_light -
+                current_light,
+                previous_light
+            )
+
+            row[
+                "Light Cumulative Removed (%)"
+            ] = safe_percent(
+                initial_light -
+                current_light,
+                initial_light
+            )
+
+            row[
+                "Light Remaining in Organic (%)"
+            ] = (
+                100.0 -
+                row[
+                    "Light Cumulative Removed (%)"
+                ]
+            )
+
+            row[
+                "Heavy Stage Removed (%)"
+            ] = safe_percent(
+                previous_heavy -
+                current_heavy,
+                previous_heavy
+            )
+
+            row[
+                "Heavy Cumulative Removed (%)"
+            ] = safe_percent(
+                initial_heavy -
+                current_heavy,
+                initial_heavy
+            )
+
+            row[
+                "Heavy Remaining in Organic (%)"
+            ] = (
+                100.0 -
+                row[
+                    "Heavy Cumulative Removed (%)"
+                ]
+            )
+
             st.session_state.washing_history.append(
                 row
             )
@@ -2157,7 +2199,9 @@ elif page == "2 — Washing":
             )
 
             st.session_state.washing_extractant_feed = (
-                result["free_extractant"]
+                result[
+                    "free_extractant"
+                ]
             )
 
             st.rerun()
@@ -2172,43 +2216,197 @@ elif page == "2 — Washing":
                 "Washing results"
             )
 
-            df_wash_display = (
-                washing_stripping_table_selector(
-                    df_wash,
-                    "Washing",
-                    "wash_table"
-                )
+            washing_options = [
+                "Concentrations",
+                "H+ and pH",
+                "Free extractant",
+                "Metal stage removal",
+                "Metal cumulative removal",
+                "Metal remaining in organic",
+                "Group stage removal",
+                "Group cumulative removal",
+                "Group remaining in organic",
+                "Aqueous Light / Heavy composition",
+                "Organic Light / Heavy composition",
+                "Light distribution between phases",
+                "Heavy distribution between phases"
+            ]
+
+            selected_washing_table = st.multiselect(
+                "Select information to display in the table",
+                washing_options,
+                default=[
+                    "Concentrations",
+                    "H+ and pH",
+                    "Free extractant",
+                    "Metal cumulative removal",
+                    "Metal remaining in organic",
+                    "Group cumulative removal",
+                    "Group remaining in organic",
+                    "Organic Light / Heavy composition",
+                    "Light distribution between phases",
+                    "Heavy distribution between phases"
+                ],
+                key="washing_table_options"
             )
 
+            display_columns = [
+                "Stage"
+            ]
+
+            if "H+ and pH" in selected_washing_table:
+
+                display_columns += [
+                    "pH",
+                    "H+ (mol/L)"
+                ]
+
+            if "Free extractant" in selected_washing_table:
+
+                display_columns.append(
+                    "Free extractant (mol/L)"
+                )
+
+            if "Concentrations" in selected_washing_table:
+
+                for metal in METALS:
+
+                    display_columns += [
+                        f"{metal} Aq (mol/L)",
+                        f"{metal} Org (mol/L)"
+                    ]
+
+            if "Metal stage removal" in selected_washing_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Stage Removed (%)"
+                    )
+
+            if "Metal cumulative removal" in selected_washing_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Cumulative Removed (%)"
+                    )
+
+            if "Metal remaining in organic" in selected_washing_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Remaining in Organic (%)"
+                    )
+
+            if "Group stage removal" in selected_washing_table:
+
+                display_columns += [
+                    "Light Stage Removed (%)",
+                    "Heavy Stage Removed (%)"
+                ]
+
+            if "Group cumulative removal" in selected_washing_table:
+
+                display_columns += [
+                    "Light Cumulative Removed (%)",
+                    "Heavy Cumulative Removed (%)"
+                ]
+
+            if "Group remaining in organic" in selected_washing_table:
+
+                display_columns += [
+                    "Light Remaining in Organic (%)",
+                    "Heavy Remaining in Organic (%)"
+                ]
+
+            if "Aqueous Light / Heavy composition" in selected_washing_table:
+
+                display_columns += [
+                    "Aqueous Light (%)",
+                    "Aqueous Heavy (%)"
+                ]
+
+            if "Organic Light / Heavy composition" in selected_washing_table:
+
+                display_columns += [
+                    "Organic Light (%)",
+                    "Organic Heavy (%)"
+                ]
+
+            if "Light distribution between phases" in selected_washing_table:
+
+                display_columns += [
+                    "Light: Aqueous (%)",
+                    "Light: Organic (%)"
+                ]
+
+            if "Heavy distribution between phases" in selected_washing_table:
+
+                display_columns += [
+                    "Heavy: Aqueous (%)",
+                    "Heavy: Organic (%)"
+                ]
+
+            display_columns = [
+                col
+                for col in display_columns
+                if col in df_wash.columns
+            ]
+
             st.dataframe(
-                df_wash_display,
+                df_wash[
+                    display_columns
+                ],
                 use_container_width=True,
                 hide_index=True
             )
 
-            selected_metals_graph = st.multiselect(
+            selected_metals = st.multiselect(
                 "Metals to display",
                 METALS,
                 default=["Nd", "Sm"],
-                key="wash_graph_metals"
+                key="wash_metals"
             )
 
-            if selected_metals_graph:
+            if selected_metals:
 
-                cols = [
-                    f"{m} Sequence Cumulative Removed (%)"
-                    for m in selected_metals_graph
-                ]
+                c1, c2 = st.columns(2)
 
-                st.pyplot(
-                    plot_line_chart(
-                        df_wash,
-                        cols,
-                        "Cumulative REE removal during washing",
-                        "Cumulative removed (%)"
-                    ),
-                    clear_figure=True
-                )
+                with c1:
+
+                    cols = [
+                        f"{m} Cumulative Removed (%)"
+                        for m in selected_metals
+                    ]
+
+                    st.pyplot(
+                        plot_line_chart(
+                            df_wash,
+                            cols,
+                            "Cumulative REE removal during washing",
+                            "Cumulative removed (%)"
+                        ),
+                        clear_figure=True
+                    )
+
+                with c2:
+
+                    cols = [
+                        f"{m} Stage Removed (%)"
+                        for m in selected_metals
+                    ]
+
+                    st.pyplot(
+                        plot_line_chart(
+                            df_wash,
+                            cols,
+                            "Stage REE removal during washing",
+                            "Stage removed (%)"
+                        ),
+                        clear_figure=True
+                    )
 
             c1, c2 = st.columns(2)
 
@@ -2286,8 +2484,8 @@ elif page == "2 — Washing":
                 )
 
                 final_moles = (
-                    final_org
-                    * combined["volume"]
+                    final_org *
+                    combined["volume"]
                 )
 
                 final_extractant = (
@@ -2296,8 +2494,8 @@ elif page == "2 — Washing":
                 )
 
                 final_extractant_moles = (
-                    final_extractant
-                    * combined["volume"]
+                    final_extractant *
+                    combined["volume"]
                 )
 
                 st.session_state.stripping_organic_feed = {
@@ -2338,7 +2536,8 @@ elif page == "3 — Re-extraction":
 
     if (
         st.session_state
-        .stripping_organic_feed is None
+        .stripping_organic_feed
+        is None
     ):
 
         st.warning(
@@ -2352,13 +2551,29 @@ elif page == "3 — Re-extraction":
         .stripping_organic_feed
     )
 
-    cut_pair = st.session_state.cut_pair
+    # --------------------------------------------------------
+    # FIX:
+    # Recover the extraction cut here so that Light and Heavy
+    # are defined on the Re-extraction page as well.
+    # --------------------------------------------------------
+
+    cut_pair = (
+        st.session_state.cut_pair
+    )
 
     if cut_pair is None:
-    st.error("No extraction cut was found.")
-    st.stop()
 
-light, heavy = get_groups(cut_pair)
+        st.error(
+            "No extraction cut was found."
+        )
+
+        st.stop()
+
+    light, heavy = get_groups(
+        cut_pair
+    )
+
+    # --------------------------------------------------------
 
     st.info(
         f"Organic phase entering stripping: "
@@ -2369,6 +2584,12 @@ light, heavy = get_groups(cut_pair)
         f"Extractant concentration entering stripping: "
         f"**{feed['extractant_concentration']:.6f} "
         f"mol/L (monomer basis)**"
+    )
+
+    st.info(
+        f"Cut: **{cut_pair}**  |  "
+        f"Light REEs: **{', '.join(light)}**  |  "
+        f"Heavy REEs: **{', '.join(heavy)}**"
     )
 
     st.header(
@@ -2408,11 +2629,16 @@ light, heavy = get_groups(cut_pair)
 
         st.session_state.stripping_organic_feed = {
             **feed,
+
             "current_concentration":
-                feed["concentration"].copy(),
+                feed[
+                    "concentration"
+                ].copy(),
 
             "current_extractant":
-                feed["extractant_concentration"]
+                feed[
+                    "extractant_concentration"
+                ]
         }
 
         st.rerun()
@@ -2452,166 +2678,47 @@ light, heavy = get_groups(cut_pair)
             )
 
             row = {
-                "Stage": stage,
-                "pH": result["pH"],
-                "H+ (mol/L)": result["h"],
+
+                "Stage":
+                    stage,
+
+                "pH":
+                    result["pH"],
+
+                "H+ (mol/L)":
+                    result["h"],
+
                 "Free extractant (mol/L)":
-                    result["free_extractant"]
+                    result[
+                        "free_extractant"
+                    ]
             }
 
-            aq = result["caq"]
-            org = result["corg"]
+            aq = result[
+                "caq"
+            ]
+
+            org = result[
+                "corg"
+            ]
 
             initial = feed[
                 "concentration"
             ]
-
-            # ------------------------------------------------
-            # GROUP TOTALS
-            # ------------------------------------------------
-
-            initial_light = group_total(
-                initial,
-                light
-            )
-
-            previous_light = group_total(
-                current_org,
-                light
-            )
-
-            current_light = group_total(
-                org,
-                light
-            )
-
-            initial_heavy = group_total(
-                initial,
-                heavy
-            )
-
-            previous_heavy = group_total(
-                current_org,
-                heavy
-            )
-
-            current_heavy = group_total(
-                org,
-                heavy
-            )
-
-            # ------------------------------------------------
-            # LIGHT
-            # ------------------------------------------------
-
-            row[
-                "Light Stage Removal (%)"
-            ] = safe_percent(
-                previous_light - current_light,
-                previous_light
-            )
-
-            row[
-                "Light Global Stage Removal (%)"
-            ] = safe_percent(
-                previous_light - current_light,
-                initial_light
-            )
-
-            row[
-                "Light Sequence Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_light - current_light,
-                initial_light
-            )
-
-            row[
-                "Light Global Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_light - current_light,
-                initial_light
-            )
-
-            row[
-                "Light Remaining in Sequence (%)"
-            ] = safe_percent(
-                current_light,
-                initial_light
-            )
-
-            row[
-                "Light Remaining Globally (%)"
-            ] = safe_percent(
-                current_light,
-                initial_light
-            )
-
-            # ------------------------------------------------
-            # HEAVY
-            # ------------------------------------------------
-
-            row[
-                "Heavy Stage Removal (%)"
-            ] = safe_percent(
-                previous_heavy - current_heavy,
-                previous_heavy
-            )
-
-            row[
-                "Heavy Global Stage Removal (%)"
-            ] = safe_percent(
-                previous_heavy - current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Sequence Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_heavy - current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Global Cumulative Removal (%)"
-            ] = safe_percent(
-                initial_heavy - current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Remaining in Sequence (%)"
-            ] = safe_percent(
-                current_heavy,
-                initial_heavy
-            )
-
-            row[
-                "Heavy Remaining Globally (%)"
-            ] = safe_percent(
-                current_heavy,
-                initial_heavy
-            )
-
-            # ------------------------------------------------
-            # INDIVIDUAL METALS
-            # ------------------------------------------------
 
             for i, metal in enumerate(
                 METALS
             ):
 
                 stage_reextraction = safe_percent(
-                    current_org[i] - org[i],
+                    current_org[i] -
+                    org[i],
                     current_org[i]
                 )
 
-                sequence_cumulative = safe_percent(
-                    initial[i] - org[i],
-                    initial[i]
-                )
-
-                global_cumulative = safe_percent(
-                    initial[i] - org[i],
+                cumulative_reextraction = safe_percent(
+                    initial[i] -
+                    org[i],
                     initial[i]
                 )
 
@@ -2629,38 +2736,116 @@ light, heavy = get_groups(cut_pair)
                 ] = org[i]
 
                 row[
-                    f"{metal} Stage Removed (%)"
+                    f"{metal} Stage Re-extraction (%)"
                 ] = stage_reextraction
 
                 row[
-                    f"{metal} Sequence Cumulative Removed (%)"
-                ] = sequence_cumulative
+                    f"{metal} Cumulative Re-extraction (%)"
+                ] = cumulative_reextraction
 
                 row[
-                    f"{metal} Global Cumulative Removed (%)"
-                ] = global_cumulative
-
-                row[
-                    f"{metal} Remaining in Sequence (%)"
+                    f"{metal} Remaining in Organic (%)"
                 ] = remaining
 
-                row[
-                    f"{metal} Remaining Globally (%)"
-                ] = remaining
+            # ------------------------------------------------
+            # Group-level re-extraction metrics
+            # ------------------------------------------------
+
+            initial_light = np.sum([
+                initial[
+                    METALS.index(m)
+                ]
+                for m in light
+            ])
+
+            previous_light = np.sum([
+                current_org[
+                    METALS.index(m)
+                ]
+                for m in light
+            ])
+
+            current_light = np.sum([
+                org[
+                    METALS.index(m)
+                ]
+                for m in light
+            ])
+
+            initial_heavy = np.sum([
+                initial[
+                    METALS.index(m)
+                ]
+                for m in heavy
+            ])
+
+            previous_heavy = np.sum([
+                current_org[
+                    METALS.index(m)
+                ]
+                for m in heavy
+            ])
+
+            current_heavy = np.sum([
+                org[
+                    METALS.index(m)
+                ]
+                for m in heavy
+            ])
 
             row[
-                "Organic Light (%)"
-            ] = phase_composition(
-                org,
-                light
+                "Light Stage Re-extraction (%)"
+            ] = safe_percent(
+                previous_light -
+                current_light,
+                previous_light
             )
 
             row[
-                "Organic Heavy (%)"
-            ] = phase_composition(
-                org,
-                heavy
+                "Light Cumulative Re-extraction (%)"
+            ] = safe_percent(
+                initial_light -
+                current_light,
+                initial_light
             )
+
+            row[
+                "Light Remaining in Organic (%)"
+            ] = (
+                100.0 -
+                row[
+                    "Light Cumulative Re-extraction (%)"
+                ]
+            )
+
+            row[
+                "Heavy Stage Re-extraction (%)"
+            ] = safe_percent(
+                previous_heavy -
+                current_heavy,
+                previous_heavy
+            )
+
+            row[
+                "Heavy Cumulative Re-extraction (%)"
+            ] = safe_percent(
+                initial_heavy -
+                current_heavy,
+                initial_heavy
+            )
+
+            row[
+                "Heavy Remaining in Organic (%)"
+            ] = (
+                100.0 -
+                row[
+                    "Heavy Cumulative Re-extraction (%)"
+                ]
+            )
+
+            # ------------------------------------------------
+            # Group phase compositions
+            # ------------------------------------------------
 
             row[
                 "Aqueous Light (%)"
@@ -2673,6 +2858,20 @@ light, heavy = get_groups(cut_pair)
                 "Aqueous Heavy (%)"
             ] = phase_composition(
                 aq,
+                heavy
+            )
+
+            row[
+                "Organic Light (%)"
+            ] = phase_composition(
+                org,
+                light
+            )
+
+            row[
+                "Organic Heavy (%)"
+            ] = phase_composition(
+                org,
                 heavy
             )
 
@@ -2734,36 +2933,170 @@ light, heavy = get_groups(cut_pair)
                 "Re-extraction results"
             )
 
-            df_strip_display = (
-                washing_stripping_table_selector(
-                    df_strip,
-                    "Re-extraction",
-                    "strip_table"
-                )
+            stripping_options = [
+                "Concentrations",
+                "H+ and pH",
+                "Free extractant",
+                "Metal stage re-extraction",
+                "Metal cumulative re-extraction",
+                "Metal remaining in organic",
+                "Group stage re-extraction",
+                "Group cumulative re-extraction",
+                "Group remaining in organic",
+                "Aqueous Light / Heavy composition",
+                "Organic Light / Heavy composition",
+                "Light distribution between phases",
+                "Heavy distribution between phases"
+            ]
+
+            selected_stripping_table = st.multiselect(
+                "Select information to display in the table",
+                stripping_options,
+                default=[
+                    "Concentrations",
+                    "H+ and pH",
+                    "Free extractant",
+                    "Metal cumulative re-extraction",
+                    "Metal remaining in organic",
+                    "Group cumulative re-extraction",
+                    "Group remaining in organic",
+                    "Aqueous Light / Heavy composition",
+                    "Organic Light / Heavy composition",
+                    "Light distribution between phases",
+                    "Heavy distribution between phases"
+                ],
+                key="stripping_table_options"
             )
 
+            display_columns = [
+                "Stage"
+            ]
+
+            if "H+ and pH" in selected_stripping_table:
+
+                display_columns += [
+                    "pH",
+                    "H+ (mol/L)"
+                ]
+
+            if "Free extractant" in selected_stripping_table:
+
+                display_columns.append(
+                    "Free extractant (mol/L)"
+                )
+
+            if "Concentrations" in selected_stripping_table:
+
+                for metal in METALS:
+
+                    display_columns += [
+                        f"{metal} Aq (mol/L)",
+                        f"{metal} Org (mol/L)"
+                    ]
+
+            if "Metal stage re-extraction" in selected_stripping_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Stage Re-extraction (%)"
+                    )
+
+            if "Metal cumulative re-extraction" in selected_stripping_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Cumulative Re-extraction (%)"
+                    )
+
+            if "Metal remaining in organic" in selected_stripping_table:
+
+                for metal in METALS:
+
+                    display_columns.append(
+                        f"{metal} Remaining in Organic (%)"
+                    )
+
+            if "Group stage re-extraction" in selected_stripping_table:
+
+                display_columns += [
+                    "Light Stage Re-extraction (%)",
+                    "Heavy Stage Re-extraction (%)"
+                ]
+
+            if "Group cumulative re-extraction" in selected_stripping_table:
+
+                display_columns += [
+                    "Light Cumulative Re-extraction (%)",
+                    "Heavy Cumulative Re-extraction (%)"
+                ]
+
+            if "Group remaining in organic" in selected_stripping_table:
+
+                display_columns += [
+                    "Light Remaining in Organic (%)",
+                    "Heavy Remaining in Organic (%)"
+                ]
+
+            if "Aqueous Light / Heavy composition" in selected_stripping_table:
+
+                display_columns += [
+                    "Aqueous Light (%)",
+                    "Aqueous Heavy (%)"
+                ]
+
+            if "Organic Light / Heavy composition" in selected_stripping_table:
+
+                display_columns += [
+                    "Organic Light (%)",
+                    "Organic Heavy (%)"
+                ]
+
+            if "Light distribution between phases" in selected_stripping_table:
+
+                display_columns += [
+                    "Light: Aqueous (%)",
+                    "Light: Organic (%)"
+                ]
+
+            if "Heavy distribution between phases" in selected_stripping_table:
+
+                display_columns += [
+                    "Heavy: Aqueous (%)",
+                    "Heavy: Organic (%)"
+                ]
+
+            display_columns = [
+                col
+                for col in display_columns
+                if col in df_strip.columns
+            ]
+
             st.dataframe(
-                df_strip_display,
+                df_strip[
+                    display_columns
+                ],
                 use_container_width=True,
                 hide_index=True
             )
 
-            selected_metals_graph = st.multiselect(
+            selected_metals = st.multiselect(
                 "Metals to display",
                 METALS,
                 default=["Nd", "Sm"],
-                key="strip_graph_metals"
+                key="strip_metals"
             )
 
-            if selected_metals_graph:
+            if selected_metals:
 
                 c1, c2 = st.columns(2)
 
                 with c1:
 
                     cols = [
-                        f"{m} Sequence Cumulative Removed (%)"
-                        for m in selected_metals_graph
+                        f"{m} Cumulative Re-extraction (%)"
+                        for m in selected_metals
                     ]
 
                     st.pyplot(
@@ -2779,8 +3112,8 @@ light, heavy = get_groups(cut_pair)
                 with c2:
 
                     cols = [
-                        f"{m} Stage Removed (%)"
-                        for m in selected_metals_graph
+                        f"{m} Stage Re-extraction (%)"
+                        for m in selected_metals
                     ]
 
                     st.pyplot(
@@ -2793,15 +3126,77 @@ light, heavy = get_groups(cut_pair)
                         clear_figure=True
                     )
 
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.pyplot(
+                    plot_phase_composition(
+                        df_strip,
+                        "Aqueous Light (%)",
+                        "Aqueous Heavy (%)",
+                        "Stripping aqueous Light / Heavy composition"
+                    ),
+                    clear_figure=True
+                )
+
+            with c2:
+
+                st.pyplot(
+                    plot_phase_composition(
+                        df_strip,
+                        "Organic Light (%)",
+                        "Organic Heavy (%)",
+                        "Remaining organic Light / Heavy composition"
+                    ),
+                    clear_figure=True
+                )
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.pyplot(
+                    plot_group_distribution(
+                        df_strip,
+                        "Light: Aqueous (%)",
+                        "Light: Organic (%)",
+                        "Light REE distribution during re-extraction"
+                    ),
+                    clear_figure=True
+                )
+
+            with c2:
+
+                st.pyplot(
+                    plot_group_distribution(
+                        df_strip,
+                        "Heavy: Aqueous (%)",
+                        "Heavy: Organic (%)",
+                        "Heavy REE distribution during re-extraction"
+                    ),
+                    clear_figure=True
+                )
+
             st.subheader(
                 "Elemental composition"
+            )
+
+            phase = st.radio(
+                "Phase",
+                [
+                    "Aqueous",
+                    "Organic"
+                ],
+                horizontal=True,
+                key="strip_element_phase"
             )
 
             st.pyplot(
                 plot_elemental_composition(
                     df_strip,
-                    "Org",
-                    "Remaining organic elemental composition"
+                    phase,
+                    f"{phase} elemental molar composition during re-extraction"
                 ),
                 clear_figure=True
             )
@@ -2813,7 +3208,7 @@ light, heavy = get_groups(cut_pair)
                 final_values.append(
                     df_strip.iloc[-1][
                         f"{metal} "
-                        "Sequence Cumulative Removed (%)"
+                        "Cumulative Re-extraction (%)"
                     ]
                 )
 
