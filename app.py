@@ -2352,6 +2352,14 @@ elif page == "3 — Re-extraction":
         .stripping_organic_feed
     )
 
+    cut_pair = st.session_state.cut_pair
+
+    if cut_pair is None:
+    st.error("No extraction cut was found.")
+    st.stop()
+
+light, heavy = get_groups(cut_pair)
+
     st.info(
         f"Organic phase entering stripping: "
         f"**{feed['volume']:.4f} L**"
