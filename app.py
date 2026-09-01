@@ -15,7 +15,7 @@ from scipy.optimize import least_squares
 # ============================================================
 
 st.set_page_config(
-    page_title="REE Solvent Extraction Simulator",
+    page_title="Cross-current REEs extraction separation circuit",
     page_icon="🧪",
     layout="wide"
 )
@@ -81,8 +81,6 @@ DEFAULTS = {
     "combined_organic": None,
     "washing_organic_feed": None,
     "stripping_organic_feed": None,
-
-    "extraction_sap_remaining": None,
 
     "extraction_started": False,
     "washing_started": False,
@@ -188,8 +186,14 @@ def solve_extraction_stage(
     caq_in,
     h_in,
     extractant_total,
-    saponified_capacity
+    saponified_capacity,
+    oa_ratio
 ):
+
+    # R = V_org / V_aq for this contact. Needed because the metal,
+    # extractant and H+ balances live in different phases/volumes;
+    # without R the code implicitly (and wrongly) assumed O/A = 1.
+    R = max(oa_ratio, 1e-12)
 
     h_guess = max(h_in, 1e-8)
 
@@ -208,26 +212,31 @@ def solve_extraction_stage(
             e_free
         )
 
+        # Mass balance across unequal phase volumes:
+        # C_aq_in * V_aq = C_aq_eq * V_aq + C_org_eq * V_org
         caq_eq = caq_in / (
-            1.0 + D
+            1.0 + D * R
         )
 
-        corg_eq = caq_in - caq_eq
+        corg_eq = D * caq_eq
 
-        extracted = np.sum(corg_eq)
+        extracted = np.sum(corg_eq)   # mol per L organic
 
         e_expected = (
             extractant_total
             - 3.0 * extracted
         )
 
+        # H+ is generated into the AQUEOUS phase; convert the
+        # organic-basis "extracted" amount into an aqueous-phase
+        # concentration change using R.
         h_generated = (
-            3.0 * extracted
+            3.0 * extracted * R
         )
 
         neutralized = min(
             h_generated,
-            saponified_capacity
+            saponified_capacity * R
         )
 
         h_expected = (
@@ -277,25 +286,28 @@ def solve_extraction_stage(
     )
 
     caq_eq = caq_in / (
-        1.0 + D
+        1.0 + D * R
     )
 
-    corg_eq = caq_in - caq_eq
+    corg_eq = D * caq_eq
 
     extracted = np.sum(corg_eq)
 
     h_generated = (
-        3.0 * extracted
+        3.0 * extracted * R
     )
 
     neutralized = min(
         h_generated,
-        saponified_capacity
+        saponified_capacity * R
     )
 
+    # Reported back on the same organic-phase basis as
+    # saponified_capacity (dividing the aqueous-basis neutralized
+    # amount by R converts it back to mol per L organic).
     sap_remaining = max(
         0.0,
-        saponified_capacity - neutralized
+        saponified_capacity - neutralized / R
     )
 
     return {
@@ -321,73 +333,83 @@ def solve_extraction_stage(
 def solve_washing_stage(
     corg_in,
     h_wash,
-    extractant_in
+    extractant_in,
+    oa_ratio
 ):
 
-    h_eq = max(
-        h_wash,
-        1e-10
-    )
+    # R = V_org / V_aq for the wash contact.
+    R = max(oa_ratio, 1e-12)
 
-    e_free = max(
-        extractant_in,
-        1e-10
-    )
+    h_guess = max(h_wash, 1e-10)
+    e_guess = max(extractant_in, 1e-10)
 
-    for _ in range(200):
+    def residual(log_vars):
+
+        h_eq = np.exp(log_vars[0])
+        e_free = np.exp(log_vars[1])
 
         D = distribution_coefficients(
             h_eq,
             e_free
         )
 
-        caq_eq = corg_in / (
-            1.0 + D
+        # Mass balance: C_org_in * V_org = C_aq_eq * V_aq + C_org_eq * V_org
+        caq_eq = corg_in * R / (
+            1.0 + D * R
         )
 
-        corg_eq = corg_in - caq_eq
+        corg_eq = D * caq_eq
 
         metal_to_aq = np.sum(
             corg_in - corg_eq
+        )   # mol per L organic
+
+        # Extractant is regenerated in the organic phase as metal
+        # leaves it (same phase/basis as extractant_in, no R needed).
+        e_expected = (
+            extractant_in
+            + 3.0 * metal_to_aq
         )
 
-        h_new = max(
+        # Re-extraction (org -> aq) CONSUMES aqueous H+ - it is the
+        # reverse of the extraction reaction, not a source of H+.
+        # The organic-basis "metal_to_aq" must be converted to an
+        # aqueous-phase concentration change via R.
+        h_expected = max(
             1e-12,
-            h_wash + 3.0 * metal_to_aq
+            h_wash - 3.0 * metal_to_aq * R
         )
 
-        e_new = max(
-            1e-12,
-            extractant_in + 3.0 * metal_to_aq
-        )
+        scale_e = max(extractant_in, 1e-6)
+        scale_h = max(h_expected, 1e-12)
 
-        if (
-            abs(h_new - h_eq) < 1e-12
-            and
-            abs(e_new - e_free) < 1e-12
-        ):
-            break
+        return [
+            (e_free - e_expected) / scale_e,
+            (h_eq - h_expected) / scale_h
+        ]
 
-        h_eq = (
-            0.5 * h_eq
-            + 0.5 * h_new
-        )
+    result = least_squares(
+        residual,
+        np.log([h_guess, e_guess]),
+        xtol=1e-13,
+        ftol=1e-13,
+        gtol=1e-13,
+        max_nfev=5000
+    )
 
-        e_free = (
-            0.5 * e_free
-            + 0.5 * e_new
-        )
+    h_eq = np.exp(result.x[0])
+    e_free = np.exp(result.x[1])
 
     D = distribution_coefficients(
         h_eq,
         e_free
     )
 
-    caq_eq = corg_in / (
-        1.0 + D
+    caq_eq = corg_in * R / (
+        1.0 + D * R
     )
 
-    corg_eq = corg_in - caq_eq
+    corg_eq = D * caq_eq
 
     return {
         "caq": caq_eq,
@@ -408,61 +430,80 @@ def solve_washing_stage(
 def solve_stripping_stage(
     corg_in,
     h_acid,
-    extractant_in
+    extractant_in,
+    oa_ratio
 ):
 
-    h_eq = max(
-        h_acid,
-        1e-12
-    )
+    # R = V_org / V_aq for the stripping contact.
+    R = max(oa_ratio, 1e-12)
 
-    e_free = max(
-        extractant_in,
-        1e-12
-    )
+    h_guess = max(h_acid, 1e-12)
+    e_guess = max(extractant_in, 1e-12)
 
-    for _ in range(300):
+    def residual(log_vars):
+
+        h_eq = np.exp(log_vars[0])
+        e_free = np.exp(log_vars[1])
 
         D = distribution_coefficients(
             h_eq,
             e_free
         )
 
-        caq_eq = corg_in / (
-            D + 1.0
+        caq_eq = corg_in * R / (
+            1.0 + D * R
         )
 
-        corg_eq = corg_in - caq_eq
+        corg_eq = D * caq_eq
 
         stripped = np.sum(
             corg_in - corg_eq
+        )   # mol per L organic
+
+        # Extractant is regenerated in the organic phase as metal
+        # strips out. The previous version never updated this
+        # during the solve, so it silently ignored extractant
+        # regeneration across stripping stages.
+        e_expected = (
+            extractant_in
+            + 3.0 * stripped
         )
 
-        h_new = max(
+        h_expected = max(
             1e-12,
-            h_acid - 3.0 * stripped
+            h_acid - 3.0 * stripped * R
         )
 
-        if abs(
-            h_new - h_eq
-        ) < 1e-12:
-            break
+        scale_e = max(extractant_in, 1e-6)
+        scale_h = max(h_expected, 1e-12)
 
-        h_eq = (
-            0.5 * h_eq
-            + 0.5 * h_new
-        )
+        return [
+            (e_free - e_expected) / scale_e,
+            (h_eq - h_expected) / scale_h
+        ]
+
+    result = least_squares(
+        residual,
+        np.log([h_guess, e_guess]),
+        xtol=1e-13,
+        ftol=1e-13,
+        gtol=1e-13,
+        max_nfev=5000
+    )
+
+    h_eq = np.exp(result.x[0])
+    e_free = np.exp(result.x[1])
 
     D = distribution_coefficients(
         h_eq,
         e_free
     )
 
-    caq_f = corg_in / (
-        D + 1.0
+    caq_f = corg_in * R / (
+        1.0 + D * R
     )
 
-    corg_f = corg_in - caq_f
+    corg_f = D * caq_f
 
     return {
         "caq": caq_f,
@@ -1387,7 +1428,7 @@ if page == "1 — Extraction":
 
         extractant_total = st.number_input(
             "Total extractant concentration "
-            "(mol/L, monomer basis)",
+            "(mol/L, dimer basis, as (HA)\u2082)",
             min_value=0.000001,
             value=0.5,
             step=0.05
@@ -1443,12 +1484,6 @@ if page == "1 — Extraction":
 
         st.session_state.extraction_history = []
 
-        st.session_state.extraction_sap_remaining = (
-            extractant_total
-            * saponification
-            / 100.0
-        )
-
         st.session_state.extraction_started = True
         st.session_state.stop_extraction = False
 
@@ -1496,11 +1531,18 @@ if page == "1 — Extraction":
             disabled=st.session_state.stop_extraction
         ):
 
+            saponified_capacity = (
+                extractant_total
+                * saponification
+                / 100.0
+            )
+
             result = solve_extraction_stage(
                 current_aq,
                 h_in,
                 extractant_total,
-                st.session_state.extraction_sap_remaining
+                saponified_capacity,
+                oa_ratio
             )
 
             stage = (
@@ -1524,10 +1566,6 @@ if page == "1 — Extraction":
 
             st.session_state.extraction_history.append(
                 row
-            )
-
-            st.session_state.extraction_sap_remaining = (
-                result["sap_remaining"]
             )
 
             st.rerun()
@@ -1720,7 +1758,7 @@ if page == "1 — Extraction":
 
                 stage_organic_volume = (
                     feed_volume
-                    / oa_ratio
+                    * oa_ratio
                 )
 
                 for row in (
@@ -1833,7 +1871,7 @@ elif page == "2 — Washing":
     st.info(
         f"Combined free extractant concentration: "
         f"**{combined['extractant_concentration']:.6f} "
-        f"mol/L (monomer basis)**"
+        f"mol/L (dimer basis)**"
     )
 
     cut_pair = (
@@ -1944,7 +1982,8 @@ elif page == "2 — Washing":
             result = solve_washing_stage(
                 corg_in,
                 10 ** (-wash_pH),
-                extractant_in
+                extractant_in,
+                wash_ao
             )
 
             stage = (
@@ -2416,7 +2455,7 @@ elif page == "3 — Re-extraction":
     st.info(
         f"Extractant concentration entering stripping: "
         f"**{feed['extractant_concentration']:.6f} "
-        f"mol/L (monomer basis)**"
+        f"mol/L (dimer basis)**"
     )
 
     st.header(
@@ -2490,7 +2529,8 @@ elif page == "3 — Re-extraction":
             result = solve_stripping_stage(
                 current_org,
                 stripping_H,
-                current_extractant
+                current_extractant,
+                stripping_ao
             )
 
             stage = (
