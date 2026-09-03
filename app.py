@@ -227,9 +227,6 @@ def solve_extraction_stage(
             - 3.0 * extracted
         )
 
-        # H+ is generated into the AQUEOUS phase; convert the
-        # organic-basis "extracted" amount into an aqueous-phase
-        # concentration change using R.
         h_generated = (
             3.0 * extracted * R
         )
@@ -302,9 +299,6 @@ def solve_extraction_stage(
         saponified_capacity * R
     )
 
-    # Reported back on the same organic-phase basis as
-    # saponified_capacity (dividing the aqueous-basis neutralized
-    # amount by R converts it back to mol per L organic).
     sap_remaining = max(
         0.0,
         saponified_capacity - neutralized / R
@@ -364,17 +358,11 @@ def solve_washing_stage(
             corg_in - corg_eq
         )   # mol per L organic
 
-        # Extractant is regenerated in the organic phase as metal
-        # leaves it (same phase/basis as extractant_in, no R needed).
         e_expected = (
             extractant_in
             + 3.0 * metal_to_aq
         )
 
-        # Re-extraction (org -> aq) CONSUMES aqueous H+ - it is the
-        # reverse of the extraction reaction, not a source of H+.
-        # The organic-basis "metal_to_aq" must be converted to an
-        # aqueous-phase concentration change via R.
         h_expected = max(
             1e-12,
             h_wash - 3.0 * metal_to_aq * R
@@ -460,10 +448,6 @@ def solve_stripping_stage(
             corg_in - corg_eq
         )   # mol per L organic
 
-        # Extractant is regenerated in the organic phase as metal
-        # strips out. The previous version never updated this
-        # during the solve, so it silently ignored extractant
-        # regeneration across stripping stages.
         e_expected = (
             extractant_in
             + 3.0 * stripped
